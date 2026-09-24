@@ -1,0 +1,9 @@
+build/
+*.xcodeproj/
+spike/virtual-dualsense/Info.plist
+.DS_Store
+spike/mac-check/gccheck
+__pycache__/
+node_modules/
+dist/
+out/
