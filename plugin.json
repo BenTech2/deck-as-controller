@@ -1,0 +1,11 @@
+{
+  "name": "Deck as Controller",
+  "author": "jmedina21",
+  "flags": ["root"],
+  "api_version": 1,
+  "publish": {
+    "tags": ["controller", "bluetooth", "root"],
+    "description": "Use your Steam Deck as a wireless PS5 controller for a Mac or PC.",
+    "image": ""
+  }
+}

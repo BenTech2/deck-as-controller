@@ -1,0 +1,216 @@
+"""Steam Deck built-in controller over usbfs.
+
+While grabbed, usbhid is unbound from the controller's HID interfaces so Steam
+(and the desktop) stop seeing it, and we read the gamepad interface directly.
+"""
+import ctypes
+import errno
+import fcntl
+import glob
+import os
+import struct
+import threading
+from dataclasses import dataclass
+
+VALVE_VID, DECK_PID = "28de", "1205"
+HID_INTERFACES = (0, 1, 2)  # keyboard, mouse, gamepad
+GAMEPAD_IFACE, GAMEPAD_EP = 2, 0x83
+USBHID = "/sys/bus/usb/drivers/usbhid"
+
+USBDEVFS_CONTROL = 0xC0185500
+USBDEVFS_BULK = 0xC0185502
+USBDEVFS_CLAIMINTERFACE = 0x8004550F
+USBDEVFS_RELEASEINTERFACE = 0x80045510
+
+# Feature commands and settings registers (see linux drivers/hid/hid-steam.c)
+ID_CLEAR_DIGITAL_MAPPINGS = 0x81
+ID_SET_SETTINGS_VALUES = 0x87
+ID_TRIGGER_RUMBLE_CMD = 0xEB
+SETTING_LIZARD_MODE = 9
+SETTING_IMU_MODE = 48
+SETTING_STEAM_WATCHDOG_ENABLE = 71
+IMU_SEND_RAW_ACCEL_GYRO = 0x18
+
+# Button bits in the 0x09 state report (bytes 8..15)
+_L = {
+    "r2": 0x1, "l2": 0x2, "r1": 0x4, "l1": 0x8,
+    "y": 0x10, "b": 0x20, "x": 0x40, "a": 0x80,
+    "up": 0x100, "right": 0x200, "left": 0x400, "down": 0x800,
+    "view": 0x1000, "steam": 0x2000, "menu": 0x4000,
+    "l5": 0x8000, "r5": 0x10000,
+    "lpad_click": 0x20000, "rpad_click": 0x40000,
+    "lpad_touch": 0x80000, "rpad_touch": 0x100000,
+    "l3": 0x400000, "r3": 0x4000000,
+}
+_H = {"l4": 0x200, "r4": 0x400, "qam": 0x40000}
+
+
+@dataclass
+class DeckInput:
+    a: bool = False
+    b: bool = False
+    x: bool = False
+    y: bool = False
+    up: bool = False
+    down: bool = False
+    left: bool = False
+    right: bool = False
+    l1: bool = False
+    r1: bool = False
+    l2: bool = False
+    r2: bool = False
+    l3: bool = False
+    r3: bool = False
+    l4: bool = False
+    r4: bool = False
+    l5: bool = False
+    r5: bool = False
+    view: bool = False
+    menu: bool = False
+    steam: bool = False
+    qam: bool = False
+    lpad_click: bool = False
+    rpad_click: bool = False
+    lpad_touch: bool = False
+    rpad_touch: bool = False
+    lx: int = 0
+    ly: int = 0
+    rx: int = 0
+    ry: int = 0
+    lt: int = 0
+    rt: int = 0
+    lpad_x: int = 0
+    lpad_y: int = 0
+    rpad_x: int = 0
+    rpad_y: int = 0
+    ax: int = 0
+    ay: int = 0
+    az: int = 0
+    gx: int = 0
+    gy: int = 0
+    gz: int = 0
+
+    @classmethod
+    def parse(cls, d: bytes) -> "DeckInput | None":
+        if len(d) < 60 or d[0] != 0x01 or d[2] != 0x09:
+            return None
+        bl, bh = struct.unpack_from("<II", d, 8)
+        s = cls(**{k: bool(bl & m) for k, m in _L.items()}, **{k: bool(bh & m) for k, m in _H.items()})
+        s.lpad_x, s.lpad_y, s.rpad_x, s.rpad_y = struct.unpack_from("<4h", d, 16)
+        s.ax, s.ay, s.az, s.gx, s.gy, s.gz = struct.unpack_from("<6h", d, 24)
+        s.lt, s.rt = struct.unpack_from("<HH", d, 44)
+        s.lx, s.ly, s.rx, s.ry = struct.unpack_from("<4h", d, 48)
+        return s
+
+
+def find_device() -> str | None:
+    """sysfs path of the Deck controller USB device, e.g. /sys/bus/usb/devices/3-3."""
+    for dev in glob.glob("/sys/bus/usb/devices/*"):
+        try:
+            if (open(f"{dev}/idVendor").read().strip() == VALVE_VID
+                    and open(f"{dev}/idProduct").read().strip() == DECK_PID):
+                return dev
+        except OSError:
+            continue
+    return None
+
+
+def rebind_all():
+    """Give every Deck controller HID interface back to usbhid. Safe to call anytime."""
+    dev = find_device()
+    if not dev:
+        return
+    name = os.path.basename(dev)
+    for i in HID_INTERFACES:
+        iface = f"{name}:1.{i}"
+        if os.path.exists(f"/sys/bus/usb/devices/{iface}") and not os.path.exists(f"{USBHID}/{iface}"):
+            try:
+                with open(f"{USBHID}/bind", "w") as f:
+                    f.write(iface)
+            except OSError:
+                pass
+
+
+class DeckController:
+    """Exclusive access to the Deck controller. Use grab()/release()."""
+
+    def __init__(self):
+        self.fd = None
+        self.dev = None
+        self.lock = threading.Lock()  # serializes control transfers
+
+    def grab(self):
+        self.dev = find_device()
+        if not self.dev:
+            raise RuntimeError("Steam Deck controller not found")
+        name = os.path.basename(self.dev)
+        for i in HID_INTERFACES:
+            iface = f"{name}:1.{i}"
+            if os.path.exists(f"{USBHID}/{iface}"):
+                with open(f"{USBHID}/unbind", "w") as f:
+                    f.write(iface)
+        bus = int(open(f"{self.dev}/busnum").read())
+        devnum = int(open(f"{self.dev}/devnum").read())
+        try:
+            self.fd = os.open(f"/dev/bus/usb/{bus:03d}/{devnum:03d}", os.O_RDWR)
+            fcntl.ioctl(self.fd, USBDEVFS_CLAIMINTERFACE, struct.pack("I", GAMEPAD_IFACE))
+            self.configure()
+        except Exception:
+            self.release()
+            raise
+
+    def configure(self):
+        """Turn off keyboard/mouse emulation and the Steam watchdog; enable raw IMU."""
+        self._feature(bytes([ID_CLEAR_DIGITAL_MAPPINGS]))
+        self._settings((SETTING_LIZARD_MODE, 0),
+                       (SETTING_STEAM_WATCHDOG_ENABLE, 0),
+                       (SETTING_IMU_MODE, IMU_SEND_RAW_ACCEL_GYRO))
+
+    def release(self):
+        if self.fd is not None:
+            try:
+                self.rumble(0, 0)
+            except OSError:
+                pass
+            try:
+                fcntl.ioctl(self.fd, USBDEVFS_RELEASEINTERFACE, struct.pack("I", GAMEPAD_IFACE))
+            except OSError:
+                pass
+            os.close(self.fd)
+            self.fd = None
+        rebind_all()
+
+    def read(self, timeout_ms: int = 100) -> bytes | None:
+        """One raw 64-byte report, or None on timeout. Raises OSError if the device is gone."""
+        data = bytearray(64)
+        buf = (ctypes.c_uint8 * 64).from_buffer(data)
+        arg = bytearray(struct.pack("III4xQ", GAMEPAD_EP, 64, timeout_ms, ctypes.addressof(buf)))
+        try:
+            n = fcntl.ioctl(self.fd, USBDEVFS_BULK, arg)
+        except OSError as e:
+            if e.errno == errno.ETIMEDOUT:
+                return None
+            raise
+        return bytes(data[:n])
+
+    def rumble(self, low: int, high: int):
+        """Motor levels 0..255 (low frequency / left, high frequency / right)."""
+        cmd = bytes([ID_TRIGGER_RUMBLE_CMD, 9, 0, 0, 0]) + struct.pack("<HHbb", low * 257, high * 257, 2, 0)
+        self._feature(cmd)
+
+    def _settings(self, *pairs):
+        cmd = bytearray([ID_SET_SETTINGS_VALUES, 3 * len(pairs)])
+        for reg, val in pairs:
+            cmd += bytes([reg, val & 0xFF, val >> 8])
+        self._feature(bytes(cmd))
+
+    def _feature(self, cmd: bytes):
+        data = bytearray(64)
+        data[:len(cmd)] = cmd
+        buf = (ctypes.c_uint8 * 64).from_buffer(data)
+        # SET_REPORT, feature report 0, gamepad interface
+        arg = struct.pack("BBHHHI4xQ", 0x21, 0x09, 0x0300, GAMEPAD_IFACE, 64, 500, ctypes.addressof(buf))
+        with self.lock:
+            if self.fd is None:
+                return
+            fcntl.ioctl(self.fd, USBDEVFS_CONTROL, arg)
