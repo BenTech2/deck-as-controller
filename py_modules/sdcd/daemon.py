@@ -19,7 +19,7 @@ import dbus.mainloop.glib
 from gi.repository import GLib
 
 from . import bluez, hid, screen
-from .deck import DeckController, DeckInput, rebind_all
+from .deck import DeckController, DeckInput, SharedInput, rebind_all
 from .dualsense import InputEncoder
 
 log = logging.getLogger("sdcd")
@@ -232,9 +232,10 @@ class Daemon:
                 return
             deck = DeckController()
             encoder = InputEncoder(self.options["deadzone"])
-            latest: list[DeckInput | None] = [None]
+            latest = SharedInput()
             link = hid.Link(ctrl, intr, address, self.adapter.mac_bytes,
-                            get_report=lambda: encoder.encode(latest[0]),
+                            get_report=lambda: encoder.encode(latest.take()),
+                            has_urgent=lambda: latest.urgent,
                             on_rumble=lambda low, high: _safe(deck.rumble, low, high))
             self.link = link
             self.encoder = encoder
@@ -242,7 +243,7 @@ class Daemon:
                                                    daemon=True, name="session")
             self.session_thread.start()
 
-    def _session(self, link: hid.Link, deck: DeckController, latest: list):
+    def _session(self, link: hid.Link, deck: DeckController, latest: SharedInput):
         name = self.adapter.device_name(link.address)
         self.link_name = name
         self.hosts.remember(link.address, name)
@@ -279,7 +280,7 @@ class Daemon:
                 GLib.idle_add(self._open_pairing)
             self.emit_state()
 
-    def _read_deck(self, link: hid.Link, deck: DeckController, latest: list):
+    def _read_deck(self, link: hid.Link, deck: DeckController, latest: SharedInput):
         qam_down_at = None
         last_config = time.monotonic()
         while link.alive.is_set():
@@ -296,7 +297,7 @@ class Daemon:
             state = DeckInput.parse(raw) if raw else None
             if state is None:
                 continue
-            latest[0] = state
+            latest.update(state)
             link.notify_input()
 
             # ⋯ (QAM) is reserved for us: tap toggles the screen, hold stops.

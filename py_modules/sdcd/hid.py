@@ -15,9 +15,11 @@ log = logging.getLogger("sdcd.hid")
 PSM_CTRL, PSM_INTR = 0x11, 0x13
 SOL_BLUETOOTH, BT_SECURITY, BT_SECURITY_MEDIUM = 274, 4, 2
 
-MIN_SEND_INTERVAL = 0.004  # at most 250 reports/s
+# Reports that only carry new IMU data are rate limited so they never crowd out
+# button/stick changes, which are sent as soon as the link can take them.
+IMU_INTERVAL = 0.012
 # Reports allowed to sit unacknowledged in the socket. More than this and the
-# host sees stale input, so we skip and send the newest state later instead.
+# host sees stale input, so we wait and send the newest state instead.
 MAX_IN_FLIGHT = 2
 
 
@@ -61,9 +63,11 @@ class Link:
     """One connected host. run() blocks until the host disconnects or close() is called."""
 
     def __init__(self, ctrl: socket.socket, intr: socket.socket, address: str, mac: bytes,
-                 get_report: Callable[[], bytes], on_rumble: Callable[[int, int], None]):
+                 get_report: Callable[[], bytes], has_urgent: Callable[[], bool],
+                 on_rumble: Callable[[int, int], None]):
         self.ctrl, self.intr, self.address, self.mac = ctrl, intr, address, mac
         self.get_report = get_report
+        self.has_urgent = has_urgent
         self.on_rumble = on_rumble
         self.alive = threading.Event()
         self.alive.set()  # set before any helper thread starts watching it
@@ -95,34 +99,34 @@ class Link:
             self.close()
 
     def _send_loop(self):
-        sndbuf = self.intr.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF)
-        per_report = None
-        last_send = 0.0
-        while self.alive.is_set():
-            # Send as soon as new input arrives, but at least every 16 ms (IMU/timestamps).
-            with self.new_input:
-                self.new_input.wait(timeout=0.016)
-            wait = MIN_SEND_INTERVAL - (time.monotonic() - last_send)
-            if wait > 0:
-                time.sleep(wait)
-            queued = _queued_bytes(self.intr, sndbuf)
-            if per_report and queued >= per_report * MAX_IN_FLIGHT:
-                self.skipped += 1
-                time.sleep(0.001)
-                continue
-            try:
-                self.intr.send(b"\xA1" + self.get_report(), socket.MSG_DONTWAIT)
-            except BlockingIOError:
-                self.skipped += 1
-                continue
-            except OSError as e:
-                if self.alive.is_set():
-                    log.info("interrupt channel closed: %s", e)
-                return
-            if per_report is None:
-                per_report = max(1, _queued_bytes(self.intr, sndbuf) - queued)
-            last_send = time.monotonic()
-            self.sent += 1
+        try:
+            sndbuf = self.intr.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF)
+            per_report = None
+            last_send = 0.0
+            while self.alive.is_set():
+                imu_due = time.monotonic() - last_send >= IMU_INTERVAL
+                if not (imu_due or self.has_urgent()):
+                    with self.new_input:
+                        self.new_input.wait(timeout=IMU_INTERVAL)
+                    continue
+                queued = _queued_bytes(self.intr, sndbuf)
+                if per_report and queued >= per_report * MAX_IN_FLIGHT:
+                    self.skipped += 1
+                    time.sleep(0.0005)  # poll for the controller's ack
+                    continue
+                try:
+                    self.intr.send(b"\xA1" + self.get_report(), socket.MSG_DONTWAIT)
+                except BlockingIOError:
+                    self.skipped += 1
+                    time.sleep(0.0005)
+                    continue
+                if per_report is None:
+                    per_report = max(1, _queued_bytes(self.intr, sndbuf) - queued)
+                last_send = time.monotonic()
+                self.sent += 1
+        except (OSError, ValueError) as e:  # ValueError: socket closed under us
+            if self.alive.is_set():
+                log.info("interrupt channel closed: %s", e)
 
     def _control_loop(self):
         try:

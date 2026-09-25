@@ -10,7 +10,7 @@ import glob
 import os
 import struct
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, replace
 
 VALVE_VID, DECK_PID = "28de", "1205"
 HID_INTERFACES = (0, 1, 2)  # keyboard, mouse, gamepad
@@ -101,6 +101,49 @@ class DeckInput:
         s.lt, s.rt = struct.unpack_from("<HH", d, 44)
         s.lx, s.ly, s.rx, s.ry = struct.unpack_from("<4h", d, 48)
         return s
+
+
+DIGITAL = [f.name for f in fields(DeckInput) if f.type is bool]
+
+
+def _analog_key(s: DeckInput) -> tuple:
+    """Non-IMU analog values at the resolution the host sees."""
+    return (s.lx >> 8, s.ly >> 8, s.rx >> 8, s.ry >> 8, s.lt >> 7, s.rt >> 7,
+            s.lpad_x >> 6, s.lpad_y >> 6, s.rpad_x >> 6, s.rpad_y >> 6)
+
+
+class SharedInput:
+    """Latest Deck state shared between the USB reader and the Bluetooth sender.
+
+    Presses are latched until sent, so a tap shorter than a report interval
+    still reaches the host. `urgent` marks changes other than IMU noise.
+    """
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.latest: DeckInput | None = None
+        self.latched: set[str] = set()
+        self.urgent = False
+
+    def update(self, s: DeckInput):
+        with self.lock:
+            prev = self.latest
+            self.latest = s
+            pressed = {n for n in DIGITAL if getattr(s, n)}
+            if (prev is None or pressed != {n for n in DIGITAL if getattr(prev, n)}
+                    or _analog_key(s) != _analog_key(prev)):
+                self.urgent = True
+            self.latched |= pressed
+
+    def take(self) -> DeckInput | None:
+        with self.lock:
+            s = self.latest
+            if s is None:
+                return None
+            out = replace(s, **{n: True for n in self.latched})
+            self.latched = {n for n in DIGITAL if getattr(s, n)}
+            self.urgent = False
+            return out
 
 
 def find_device() -> str | None:

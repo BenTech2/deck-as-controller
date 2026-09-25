@@ -7,11 +7,39 @@ module supervises it, relays its state to the frontend and guarantees cleanup.
 import asyncio
 import json
 import os
+import signal
 
 import decky
 
 SYSTEM_PYTHON = "/usr/bin/python3"
 DEFAULT_OPTIONS = {"screen_off": True, "deadzone": 0.08}
+
+# Restarting bluetoothd makes WirePlumber briefly unresponsive. If Steam runs
+# `wpctl` in that window, the query can hang forever and freeze Steam's UI
+# (Steam waits for it on its main thread). We end such stuck queries.
+WPCTL_GUARD_SECONDS = 45
+WPCTL_STUCK_AFTER = 5.0
+
+
+def _kill_stuck_wpctl():
+    clk = os.sysconf("SC_CLK_TCK")
+    with open("/proc/uptime") as f:
+        uptime = float(f.read().split()[0])
+    for pid in filter(str.isdigit, os.listdir("/proc")):
+        try:
+            with open(f"/proc/{pid}/comm") as f:
+                if f.read().strip() != "wpctl":
+                    continue
+            with open(f"/proc/{pid}/stat") as f:
+                started = int(f.read().rsplit(")", 1)[1].split()[19]) / clk
+        except (OSError, ValueError, IndexError):
+            continue
+        if uptime - started > WPCTL_STUCK_AFTER:
+            decky.logger.warning("ending stuck wpctl (pid %s) so Steam doesn't freeze", pid)
+            try:
+                os.kill(int(pid), signal.SIGTERM)
+            except OSError:
+                pass
 
 
 def _daemon_env() -> dict:
@@ -81,6 +109,12 @@ class Plugin:
     def _running(self) -> bool:
         return self.proc is not None and self.proc.returncode is None
 
+    async def _guard_steam(self):
+        """Watch for a stuck wpctl for a while after bluetoothd restarts."""
+        for _ in range(WPCTL_GUARD_SECONDS):
+            _kill_stuck_wpctl()
+            await asyncio.sleep(1)
+
     async def _start(self):
         self.proc = await asyncio.create_subprocess_exec(
             SYSTEM_PYTHON, "-m", "sdcd",
@@ -90,6 +124,7 @@ class Plugin:
             stderr=asyncio.subprocess.PIPE, env=_daemon_env())
         await self._publish({**self.state, "running": True, "state": "starting", "error": None})
         asyncio.get_event_loop().create_task(self._pump_stdout(self.proc))
+        asyncio.get_event_loop().create_task(self._guard_steam())
         asyncio.get_event_loop().create_task(self._pump_stderr(self.proc))
 
     async def _send(self, msg: dict):
@@ -134,6 +169,7 @@ class Plugin:
         out, _ = await proc.communicate()
         if proc.returncode:
             decky.logger.error("restore failed: %s", out.decode(errors="replace"))
+        asyncio.get_event_loop().create_task(self._guard_steam())
 
     async def _publish(self, state: dict):
         self.state = state
