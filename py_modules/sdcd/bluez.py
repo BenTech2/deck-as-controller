@@ -3,6 +3,7 @@
 bluetoothd is restarted with a runtime-only drop-in (under /run), so a reboot or
 restore_stock() returns the Deck to its normal Bluetooth configuration.
 """
+import json
 import os
 import shutil
 import subprocess
@@ -22,6 +23,10 @@ DROPIN_DIR = "/run/systemd/system/bluetooth.service.d"
 DROPIN = f"{DROPIN_DIR}/sd-controller.conf"
 BLUETOOTHD = "/usr/lib/bluetooth/bluetoothd"
 
+# Stock adapter settings we change, saved so restore_stock() can put them back.
+SAVED_ADAPTER = "/run/sd-controller-adapter.json"
+SAVED_PROPS = ("Pairable", "PairableTimeout", "Discoverable", "DiscoverableTimeout")
+
 PROFILE_PATH = "/sdc/profile"
 AGENT_PATH = "/sdc/agent"
 
@@ -30,8 +35,31 @@ def gamepad_mode_active() -> bool:
     return os.path.exists(DROPIN)
 
 
+def _adapter_props() -> dbus.Interface:
+    return dbus.Interface(dbus.SystemBus().get_object("org.bluez", "/org/bluez/hci0"),
+                          "org.freedesktop.DBus.Properties")
+
+
+def set_adapter_prop(props: dbus.Interface, name: str, value, attempts: int = 25):
+    """Set an Adapter1 property, retrying while bluetoothd is still settling (Busy)."""
+    for i in range(attempts):
+        try:
+            props.Set("org.bluez.Adapter1", name, value)
+            return
+        except dbus.DBusException as e:
+            if i == attempts - 1 or e.get_dbus_name() not in (
+                    "org.bluez.Error.Busy", "org.bluez.Error.InProgress"):
+                raise
+            time.sleep(0.2)
+
+
 def enter_gamepad_mode():
     """Restart bluetoothd without the input/hostname plugins and with a gamepad identity."""
+    if not gamepad_mode_active() and not os.path.exists(SAVED_ADAPTER):
+        props = _adapter_props()
+        saved = {name: props.Get("org.bluez.Adapter1", name) for name in SAVED_PROPS}
+        with open(SAVED_ADAPTER, "w") as f:
+            json.dump({k: (bool(v) if isinstance(v, dbus.Boolean) else int(v)) for k, v in saved.items()}, f)
     os.makedirs(RUN_DIR, exist_ok=True)
     os.makedirs(DROPIN_DIR, exist_ok=True)
     with open("/etc/bluetooth/main.conf") as f:
@@ -52,11 +80,19 @@ def enter_gamepad_mode():
 
 def restore_stock():
     """Undo enter_gamepad_mode(). Safe to call when not active."""
-    if not gamepad_mode_active():
-        return
-    os.remove(DROPIN)
-    shutil.rmtree(RUN_DIR, ignore_errors=True)
-    _restart_bluetoothd()
+    if gamepad_mode_active():
+        os.remove(DROPIN)
+        shutil.rmtree(RUN_DIR, ignore_errors=True)
+        _restart_bluetoothd()
+    if os.path.exists(SAVED_ADAPTER):
+        with open(SAVED_ADAPTER) as f:
+            saved = json.load(f)
+        props = _adapter_props()
+        for name in SAVED_PROPS:
+            if name in saved:
+                value = saved[name] if isinstance(saved[name], bool) else dbus.UInt32(saved[name])
+                set_adapter_prop(props, name, value)
+        os.remove(SAVED_ADAPTER)
 
 
 def _restart_bluetoothd():
@@ -204,4 +240,4 @@ class Adapter:
             return address
 
     def _set(self, name, value):
-        self.props.Set("org.bluez.Adapter1", name, value)
+        set_adapter_prop(self.props, name, value)

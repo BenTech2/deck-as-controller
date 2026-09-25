@@ -21,7 +21,7 @@ type Host = { address: string; name: string };
 
 type State = {
   running: boolean;
-  state: "off" | "starting" | "waiting" | "pairing" | "connected";
+  state: "off" | "starting" | "reconnecting" | "idle" | "pairing" | "connected";
   host: string;
   hosts: Host[];
   screen_off: boolean;
@@ -32,6 +32,7 @@ type State = {
 const getState = callable<[], State>("get_state");
 const setEnabled = callable<[enabled: boolean], State>("set_enabled");
 const pair = callable<[], void>("pair");
+const connect = callable<[], void>("connect");
 const toggleScreen = callable<[], void>("toggle_screen");
 const setOption = callable<[key: string, value: boolean | number], State>("set_option");
 
@@ -43,8 +44,10 @@ function statusText(s: State): string {
       return "Starting…";
     case "pairing":
       return "Ready to pair. On your Mac, open Bluetooth settings and connect to “DualSense Wireless Controller”.";
-    case "waiting":
-      return s.hosts.length ? `Connecting to ${s.hosts[0].name}…` : "Waiting for a device…";
+    case "reconnecting":
+      return `Connecting to ${s.hosts[0]?.name}… Make sure its Bluetooth is on. If it forgot the Deck, use “Pair a new device”.`;
+    case "idle":
+      return s.hosts.length ? `Disconnected from ${s.hosts[0].name}.` : "No paired device yet.";
     case "connected":
       return `Connected to ${s.host}`;
   }
@@ -94,6 +97,13 @@ function Content() {
         {s.error && (
           <PanelSectionRow>
             <Field label="Last error" description={s.error} />
+          </PanelSectionRow>
+        )}
+        {s.state === "idle" && s.hosts.length > 0 && (
+          <PanelSectionRow>
+            <ButtonItem layout="below" onClick={() => connect()}>
+              Connect to {s.hosts[0].name}
+            </ButtonItem>
           </PanelSectionRow>
         )}
         {s.running && s.state !== "connected" && s.state !== "pairing" && (

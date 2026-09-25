@@ -68,6 +68,8 @@ class Link:
         self.alive = threading.Event()
         self.new_input = threading.Condition()
         self.sent = self.skipped = 0
+        self.unplugged = False  # host removed the pairing (virtual cable unplug)
+        self.closed_by_host = False  # host disconnected on purpose (vs. link loss)
 
     def notify_input(self):
         with self.new_input:
@@ -127,12 +129,18 @@ class Link:
             while self.alive.is_set():
                 msg = self.ctrl.recv(1024)
                 if not msg:
+                    self._host_closed()
                     break
                 self.ctrl.send(self._handle_control(msg))
         except OSError:
             pass
         self.alive.clear()
         self.notify_input()
+
+    def _host_closed(self):
+        # An orderly close while we still want the link means the host disconnected us.
+        if self.alive.is_set():
+            self.closed_by_host = True
 
     def _handle_control(self, msg: bytes) -> bytes:
         kind, param = msg[0] >> 4, msg[0] & 0x0F
@@ -147,6 +155,7 @@ class Link:
         if kind == 0x7:  # SET_PROTOCOL
             return b"\x00"
         if kind == 0x1 and param == 0x5:  # HID_CONTROL: virtual cable unplug
+            self.unplugged = True
             self.alive.clear()
             return b"\x00"
         return b"\x03"  # ERR_UNSUPPORTED_REQUEST
@@ -157,6 +166,7 @@ class Link:
             while self.alive.is_set():
                 msg = self.intr.recv(1024)
                 if not msg:
+                    self._host_closed()
                     break
                 rumble = dualsense.parse_rumble(msg)
                 if rumble is not None and rumble != last:

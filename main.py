@@ -62,6 +62,9 @@ class Plugin:
     async def pair(self):
         await self._send({"cmd": "pair"})
 
+    async def connect(self):
+        await self._send({"cmd": "connect"})
+
     async def toggle_screen(self):
         await self._send({"cmd": "screen"})
 

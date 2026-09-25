@@ -1,7 +1,7 @@
 """Controller-mode daemon: makes the Deck a Bluetooth DualSense for a paired host.
 
 Talks to the Decky plugin over stdio using JSON lines:
-  stdin  commands: {"cmd": "pair"} | {"cmd": "stop"} | {"cmd": "screen"}
+  stdin  commands: {"cmd": "pair"} | {"cmd": "connect"} | {"cmd": "stop"} | {"cmd": "screen"}
                    {"cmd": "options", "screen_off": bool, "deadzone": float}
   stdout events:   {"type": "state", ...} | {"type": "stopped", "reason": str}
 """
@@ -65,9 +65,14 @@ class Daemon:
         self.session_thread: threading.Thread | None = None
         self.link_name = ""
         self.stopping = threading.Event()
+        self.reconnect_now = threading.Event()
         self.stop_reason = "stopped"
         self.adapter: bluez.Adapter | None = None
         self.last_state: dict | None = None
+        self.tick_count = 0
+        # Reconnect automatically after link loss, but not after the host disconnected us.
+        self.auto_reconnect = True
+        self.stats_since = time.monotonic()
 
     # ---- IPC -------------------------------------------------------------
 
@@ -81,8 +86,10 @@ class Daemon:
             state = "connected"
         elif self.adapter and self.adapter.pairing_open():
             state = "pairing"
+        elif self.auto_reconnect and self.hosts.items:
+            state = "reconnecting"
         else:
-            state = "waiting"
+            state = "idle"
         event = dict(type="state", state=state, host=self.link_name,
                      hosts=self.hosts.items, screen_off=screen.is_off(), options=self.options)
         if event != self.last_state:
@@ -100,6 +107,10 @@ class Daemon:
                 self.stop("stopped")
             elif cmd == "pair":
                 GLib.idle_add(self._open_pairing)
+            elif cmd == "connect":
+                self.auto_reconnect = True
+                self.reconnect_now.set()
+                self.emit_state()
             elif cmd == "screen":
                 if self.link:
                     screen.toggle()
@@ -158,9 +169,18 @@ class Daemon:
             log.exception("restoring bluetoothd failed")
 
     def _tick(self):
-        """Periodic: close an expired pairing window and refresh the UI state."""
+        """Periodic: close an expired pairing window, log link stats, refresh the UI state."""
         if self.adapter and self.adapter.pairing_until and not self.adapter.pairing_open():
             self.adapter.close_pairing()
+        link = self.link
+        if link:
+            now = time.monotonic()
+            self.tick_count += 1
+            if self.tick_count % 5 == 0:  # every 10 s
+                log.info("link: %.0f reports/s sent, %d skipped (link busy)",
+                         link.sent / (now - self.stats_since), link.skipped)
+                link.sent = link.skipped = 0
+                self.stats_since = now
         self.emit_state()
         return True
 
@@ -190,13 +210,17 @@ class Daemon:
 
     def _reconnect_loop(self):
         """Reconnect to the most recent host while not connected (like a real controller)."""
-        while not self.stopping.wait(RECONNECT_INTERVAL):
-            if self.link or not self.hosts.items or self.adapter.pairing_open():
+        while not self.stopping.is_set():
+            self.reconnect_now.wait(RECONNECT_INTERVAL)
+            self.reconnect_now.clear()
+            if (self.stopping.is_set() or self.link or not self.auto_reconnect
+                    or not self.hosts.items or self.adapter.pairing_open()):
                 continue
             address = self.hosts.items[0]["address"]
             try:
                 ctrl, intr = hid.connect(address)
-            except OSError:
+            except OSError as e:
+                log.info("reconnect to %s failed: %s", address, e)
                 continue
             self._start_session(ctrl, intr, address)
 
@@ -222,6 +246,7 @@ class Daemon:
         name = self.adapter.device_name(link.address)
         self.link_name = name
         self.hosts.remember(link.address, name)
+        self.auto_reconnect = True
         GLib.idle_add(self.adapter.close_pairing)
         log.info("connected to %s (%s)", name, link.address)
         try:
@@ -236,6 +261,7 @@ class Daemon:
             self.emit_state()
             threading.Thread(target=self._read_deck, args=(link, deck, latest), daemon=True,
                              name="deck-reader").start()
+            self.stats_since = time.monotonic()
             link.run()
         finally:
             deck.release()
@@ -244,7 +270,13 @@ class Daemon:
                 self.link = None
                 self.encoder = None
                 self.link_name = ""
-            log.info("disconnected from %s", name)
+            log.info("disconnected from %s%s", name,
+                     " (host removed the pairing)" if link.unplugged
+                     else " (by host)" if link.closed_by_host else "")
+            self.auto_reconnect = not (link.closed_by_host or link.unplugged)
+            if link.unplugged:
+                self.hosts.forget(link.address)
+                GLib.idle_add(self._open_pairing)
             self.emit_state()
 
     def _read_deck(self, link: hid.Link, deck: DeckController, latest: list):
