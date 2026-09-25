@@ -66,6 +66,7 @@ class Link:
         self.get_report = get_report
         self.on_rumble = on_rumble
         self.alive = threading.Event()
+        self.alive.set()  # set before any helper thread starts watching it
         self.new_input = threading.Condition()
         self.sent = self.skipped = 0
         self.unplugged = False  # host removed the pairing (virtual cable unplug)
@@ -86,7 +87,6 @@ class Link:
             s.close()
 
     def run(self):
-        self.alive.set()
         threading.Thread(target=self._control_loop, daemon=True, name="hid-ctrl").start()
         threading.Thread(target=self._interrupt_rx, daemon=True, name="hid-intr-rx").start()
         try:
