@@ -10,6 +10,7 @@ import glob
 import os
 import struct
 import threading
+import time
 from dataclasses import dataclass, fields, replace
 
 VALVE_VID, DECK_PID = "28de", "1205"
@@ -177,10 +178,17 @@ def rebind_all():
 class DeckController:
     """Exclusive access to the Deck controller. Use grab()/release()."""
 
+    # The controller gets overloaded by rapid rumble commands; Steam and the kernel
+    # driver throttle them to 20 Hz, always applying the latest values.
+    RUMBLE_INTERVAL = 0.05
+
     def __init__(self):
         self.fd = None
         self.dev = None
         self.lock = threading.Lock()  # serializes control transfers
+        self.rumble_wanted = (0, 0)
+        self.rumble_applied = (0, 0)
+        self.rumble_event = threading.Event()
 
     def grab(self):
         self.dev = find_device()
@@ -198,6 +206,7 @@ class DeckController:
             self.fd = os.open(f"/dev/bus/usb/{bus:03d}/{devnum:03d}", os.O_RDWR)
             fcntl.ioctl(self.fd, USBDEVFS_CLAIMINTERFACE, struct.pack("I", GAMEPAD_IFACE))
             self.configure()
+            threading.Thread(target=self._rumble_loop, daemon=True, name="deck-rumble").start()
         except Exception:
             self.release()
             raise
@@ -212,7 +221,7 @@ class DeckController:
     def release(self):
         if self.fd is not None:
             try:
-                self.rumble(0, 0)
+                self._send_rumble(0, 0)
             except OSError:
                 pass
             try:
@@ -237,7 +246,24 @@ class DeckController:
         return bytes(data[:n])
 
     def rumble(self, low: int, high: int):
-        """Motor levels 0..255 (low frequency / left, high frequency / right)."""
+        """Request motor levels 0..255 (low frequency / left, high frequency / right)."""
+        self.rumble_wanted = (low, high)
+        self.rumble_event.set()
+
+    def _rumble_loop(self):
+        while self.fd is not None:
+            self.rumble_event.wait(timeout=1)
+            self.rumble_event.clear()
+            wanted = self.rumble_wanted
+            if wanted != self.rumble_applied:
+                try:
+                    self._send_rumble(*wanted)
+                    self.rumble_applied = wanted
+                except OSError:
+                    pass
+            time.sleep(self.RUMBLE_INTERVAL)
+
+    def _send_rumble(self, low: int, high: int):
         cmd = bytes([ID_TRIGGER_RUMBLE_CMD, 9, 0, 0, 0]) + struct.pack("<HHbb", low * 257, high * 257, 2, 0)
         self._feature(cmd)
 
