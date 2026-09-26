@@ -8,14 +8,13 @@ parser = argparse.ArgumentParser(prog="sdcd")
 parser.add_argument("--settings-dir", default="/tmp/sdcd")
 parser.add_argument("--options", default="{}", help="initial options as JSON")
 parser.add_argument("--restore", action="store_true",
-                    help="undo everything controller mode changes (bluetoothd, controller, screen)")
+                    help="undo everything controller mode changes (bluetoothd, controller)")
 args = parser.parse_args()
 
 logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(name)s: %(message)s")
 
 if args.restore:
-    from . import bluez, deck, screen
-    screen.restore()
+    from . import bluez, deck
     deck.rebind_all()
     bluez.restore_stock()
 else:

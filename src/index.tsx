@@ -1,6 +1,7 @@
 import {
   ButtonItem,
   Field,
+  Navigation,
   PanelSection,
   PanelSectionRow,
   SliderField,
@@ -12,10 +13,12 @@ import {
   callable,
   definePlugin,
   removeEventListener,
+  routerHook,
   toaster,
 } from "@decky/api";
 import { useEffect, useState } from "react";
 import { FaGamepad } from "react-icons/fa";
+import { ScreenBlanker, disposeBlanker } from "./blanker";
 
 type Host = { address: string; name: string };
 
@@ -148,7 +151,8 @@ function Content() {
         <PanelSectionRow>
           <Field
             description={
-              "Tap ⋯ to turn the Deck screen on or off. Hold ⋯ for 2 seconds to stop. " +
+              "The Deck's controls go to your device. Tap ⋯ (or the black screen) to turn the " +
+              "Deck screen on or off. Hold ⋯ for 2 seconds to stop. " +
               "Bluetooth controllers and keyboards paired to the Deck are unavailable while this is on."
             }
           />
@@ -162,12 +166,15 @@ export default definePlugin(() => {
   let lastState: State["state"] = "off";
   const stateListener = addEventListener<[State]>("state", (s) => {
     if (s.state === "connected" && lastState !== "connected") {
+      // The Deck's controller now belongs to the host, so the menu can't be used anyway.
+      Navigation.CloseSideMenus();
       toaster.toast({ title: "Deck as Controller", body: `Connected to ${s.host}` });
     } else if (lastState === "connected" && s.state !== "connected") {
       toaster.toast({ title: "Deck as Controller", body: "Disconnected" });
     }
     lastState = s.state;
   });
+  routerHook.addGlobalComponent("DeckAsControllerBlanker", ScreenBlanker);
   const errorListener = addEventListener<[string]>("error", (message) => {
     toaster.toast({ title: "Deck as Controller", body: message });
   });
@@ -178,6 +185,8 @@ export default definePlugin(() => {
     content: <Content />,
     icon: <FaGamepad />,
     onDismount() {
+      routerHook.removeGlobalComponent("DeckAsControllerBlanker");
+      disposeBlanker();
       removeEventListener("state", stateListener);
       removeEventListener("error", errorListener);
     },

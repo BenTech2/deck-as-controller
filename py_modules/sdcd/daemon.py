@@ -18,7 +18,7 @@ import dbus
 import dbus.mainloop.glib
 from gi.repository import GLib
 
-from . import bluez, hid, screen
+from . import bluez, hid
 from .deck import DeckController, DeckInput, SharedInput, rebind_all
 from .dualsense import InputEncoder
 
@@ -69,6 +69,8 @@ class Daemon:
         self.stop_reason = "stopped"
         self.adapter: bluez.Adapter | None = None
         self.last_state: dict | None = None
+        # Deck screen blanking is drawn by the plugin frontend; we only own the flag.
+        self.screen_off = False
         self.tick_count = 0
         # Reconnect automatically after link loss, but not after the host disconnected us.
         self.auto_reconnect = True
@@ -91,7 +93,7 @@ class Daemon:
         else:
             state = "idle"
         event = dict(type="state", state=state, host=self.link_name,
-                     hosts=self.hosts.items, screen_off=screen.is_off(), options=self.options)
+                     hosts=self.hosts.items, screen_off=self.screen_off, options=self.options)
         if event != self.last_state:
             self.last_state = json.loads(json.dumps(event))  # deep copy
             self.emit(**event)
@@ -112,9 +114,7 @@ class Daemon:
                 self.reconnect_now.set()
                 self.emit_state()
             elif cmd == "screen":
-                if self.link:
-                    screen.toggle()
-                self.emit_state()
+                self.toggle_screen()
             elif cmd == "options":
                 self.options.update({k: v for k, v in msg.items() if k in ("screen_off", "deadzone")})
                 if self.encoder:
@@ -147,6 +147,11 @@ class Daemon:
             self._cleanup()
             self.emit(type="stopped", reason=self.stop_reason)
 
+    def toggle_screen(self):
+        if self.link:
+            self.screen_off = not self.screen_off
+        self.emit_state()
+
     def stop(self, reason: str):
         if self.stopping.is_set():
             return
@@ -162,7 +167,6 @@ class Daemon:
         if self.session_thread:
             self.session_thread.join(timeout=3)
         rebind_all()
-        screen.restore()
         try:
             bluez.restore_stock()
         except Exception:
@@ -257,8 +261,7 @@ class Daemon:
             self.emit(type="error", message=f"Could not take over the Deck controller: {e}")
             link.close()
         else:
-            if self.options["screen_off"]:
-                screen.turn_off()
+            self.screen_off = self.options["screen_off"]
             self.emit_state()
             threading.Thread(target=self._read_deck, args=(link, deck, latest), daemon=True,
                              name="deck-reader").start()
@@ -266,7 +269,7 @@ class Daemon:
             link.run()
         finally:
             deck.release()
-            screen.restore()
+            self.screen_off = False
             with self.link_lock:
                 self.link = None
                 self.encoder = None
@@ -310,8 +313,7 @@ class Daemon:
                 return
             elif not state.qam and qam_down_at is not None:
                 if now - qam_down_at <= QAM_TAP_MAX:
-                    screen.toggle()
-                    self.emit_state()
+                    self.toggle_screen()
                 qam_down_at = None
 
 
