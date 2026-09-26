@@ -176,7 +176,7 @@ class Link:
                 header = msg[:9]
                 if header not in logged and len(logged) < 40:  # diagnostics: each distinct header once
                     logged.add(header)
-                    log.info("output report %dB: %s", len(msg), msg[:16].hex(" "))
+                    log.debug("output report %dB: %s", len(msg), msg[:16].hex(" "))
                 rumble = dualsense.parse_rumble(msg)
                 if rumble is not None and rumble != last:
                     last = rumble
