@@ -1,0 +1,11 @@
+"""Emulated controller types."""
+from .base import Battery, Encoder, Profile
+from .dualsense import DualSense
+from .xbox import Xbox
+
+PROFILES: dict[str, Profile] = {p.id: p for p in (DualSense(), DualSense(edge=True), Xbox())}
+DEFAULT_PROFILE = "dualsense"
+
+
+def get_profile(profile_id: str) -> Profile:
+    return PROFILES.get(profile_id) or PROFILES[DEFAULT_PROFILE]

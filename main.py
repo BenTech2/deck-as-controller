@@ -12,7 +12,13 @@ import signal
 import decky
 
 SYSTEM_PYTHON = "/usr/bin/python3"
-DEFAULT_OPTIONS = {"screen_off": True, "deadzone": 0.08}
+DEFAULT_OPTIONS = {"screen_off": True, "deadzone": 0.08, "pad_haptics": True, "profile": "dualsense"}
+# Must match py_modules/sdcd/profiles (the daemon also reports these once running).
+PROFILES = [
+    {"id": "dualsense", "label": "PS5"},
+    {"id": "dualsense_edge", "label": "PS5 Edge (back buttons)"},
+    {"id": "xbox_elite", "label": "Xbox Elite (back buttons)"},
+]
 
 # Restarting bluetoothd makes WirePlumber briefly unresponsive. If Steam runs
 # `wpctl` in that window, the query can hang forever and freeze Steam's UI
@@ -53,6 +59,7 @@ def _daemon_env() -> dict:
 
 class Plugin:
     proc: asyncio.subprocess.Process | None = None
+    pump: asyncio.Task | None = None  # reads daemon output; finishes after cleanup
     state: dict = {}
     options: dict = {}
 
@@ -85,23 +92,49 @@ class Plugin:
                 decky.logger.warning("daemon did not stop in time; killing it")
                 self.proc.kill()
                 await self.proc.wait()
+        if not enabled and self.pump:
+            await self.pump  # wait for the restore, so a restart can't race it
         return self.state
 
     async def pair(self):
         await self._send({"cmd": "pair"})
 
-    async def connect(self):
-        await self._send({"cmd": "connect"})
+    async def connect(self, address: str = ""):
+        await self._send({"cmd": "connect", "address": address or None})
+
+    async def forget(self, address: str) -> dict:
+        if self._running():
+            await self._send({"cmd": "forget", "address": address})
+        else:
+            hosts = [h for h in self._load_hosts() if h["address"] != address]
+            os.makedirs(decky.DECKY_PLUGIN_SETTINGS_DIR, exist_ok=True)
+            with open(os.path.join(decky.DECKY_PLUGIN_SETTINGS_DIR, "hosts.json"), "w") as f:
+                json.dump(hosts, f)
+            proc = await asyncio.create_subprocess_exec(
+                "bluetoothctl", "remove", address,
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            await proc.wait()
+            await self._publish({**self.state, "hosts": hosts})
+        return self.state
 
     async def toggle_screen(self):
         await self._send({"cmd": "screen"})
 
     async def set_option(self, key: str, value) -> dict:
-        if key in DEFAULT_OPTIONS:
-            self.options[key] = value
-            self._save_options()
+        if key not in DEFAULT_OPTIONS or self.options.get(key) == value:
+            return self.state
+        self.options[key] = value
+        self._save_options()
+        self.state = {**self.state, "options": self.options}
+        if key == "profile":
+            # The controller type is the daemon's Bluetooth identity: restart it.
+            if self._running():
+                await self.set_enabled(False)
+                await self.set_enabled(True)
+            else:
+                await self._publish(self.state)
+        else:
             await self._send({"cmd": "options", key: value})
-            self.state = {**self.state, "options": self.options}
         return self.state
 
     # ---- daemon -----------------------------------------------------------
@@ -123,7 +156,7 @@ class Plugin:
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE, env=_daemon_env())
         await self._publish({**self.state, "running": True, "state": "starting", "error": None})
-        asyncio.get_event_loop().create_task(self._pump_stdout(self.proc))
+        self.pump = asyncio.get_event_loop().create_task(self._pump_stdout(self.proc))
         asyncio.get_event_loop().create_task(self._guard_steam())
         asyncio.get_event_loop().create_task(self._pump_stderr(self.proc))
 
@@ -178,8 +211,9 @@ class Plugin:
     # ---- settings ---------------------------------------------------------
 
     def _idle_state(self) -> dict:
-        return {"running": False, "state": "off", "host": "", "hosts": self._load_hosts(),
-                "screen_off": False, "options": self.options, "error": None}
+        return {"running": False, "state": "off", "host": "", "target": None,
+                "hosts": self._load_hosts(), "screen_off": False, "options": self.options,
+                "profiles": PROFILES, "error": None}
 
     def _load_hosts(self) -> list:
         try:

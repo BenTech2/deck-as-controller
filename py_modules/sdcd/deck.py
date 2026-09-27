@@ -27,6 +27,7 @@ USBDEVFS_RELEASEINTERFACE = 0x80045510
 ID_CLEAR_DIGITAL_MAPPINGS = 0x81
 ID_SET_SETTINGS_VALUES = 0x87
 ID_TRIGGER_RUMBLE_CMD = 0xEB
+ID_TRIGGER_HAPTIC_PULSE = 0x8F
 SETTING_LIZARD_MODE = 9
 SETTING_IMU_MODE = 48
 SETTING_STEAM_WATCHDOG_ENABLE = 71
@@ -262,6 +263,12 @@ class DeckController:
                 except OSError:
                     pass
             time.sleep(self.RUMBLE_INTERVAL)
+
+    def click_pulse(self, left: bool):
+        """Short haptic tick on a trackpad, like Steam gives when a pad is clicked."""
+        # Pads are swapped on this report for legacy reasons: 1 = left, 0 = right.
+        cmd = bytes([ID_TRIGGER_HAPTIC_PULSE, 8, 1 if left else 0]) + struct.pack("<HHHB", 1200, 0, 1, 0)
+        self._feature(cmd)
 
     def _send_rumble(self, low: int, high: int):
         cmd = bytes([ID_TRIGGER_RUMBLE_CMD, 9, 0, 0, 0]) + struct.pack("<HHbb", low * 257, high * 257, 2, 0)

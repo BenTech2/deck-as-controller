@@ -12,10 +12,9 @@ import time
 import dbus
 import dbus.service
 
-from . import dualsense
+from .profiles import Profile
 
 HID_UUID = "00001124-0000-1000-8000-00805f9b34fb"
-DEVICE_NAME = "DualSense Wireless Controller"
 GAMEPAD_CLASS = "0x002508"
 
 RUN_DIR = "/run/sd-controller"
@@ -53,8 +52,8 @@ def set_adapter_prop(props: dbus.Interface, name: str, value, attempts: int = 25
             time.sleep(0.2)
 
 
-def enter_gamepad_mode():
-    """Restart bluetoothd without the input/hostname plugins and with a gamepad identity."""
+def enter_gamepad_mode(profile: Profile):
+    """Restart bluetoothd without the input/hostname plugins and with the profile's identity."""
     if not gamepad_mode_active() and not os.path.exists(SAVED_ADAPTER):
         props = _adapter_props()
         saved = {name: props.Get("org.bluez.Adapter1", name) for name in SAVED_PROPS}
@@ -65,8 +64,8 @@ def enter_gamepad_mode():
     with open("/etc/bluetooth/main.conf") as f:
         conf = f.read()
     identity = (f"[General]\nClass = {GAMEPAD_CLASS}\n"
-                f"DeviceID = usb:{dualsense.SONY_VID:04X}:{dualsense.DUALSENSE_PID:04X}:0100\n"
-                f"Name = {DEVICE_NAME}\n")
+                f"DeviceID = usb:{profile.vendor_id:04X}:{profile.product_id:04X}:{profile.version:04X}\n"
+                f"Name = {profile.bt_name}\n")
     conf = conf.replace("[General]\n", identity, 1) if "[General]\n" in conf else identity + conf
     with open(f"{RUN_DIR}/main.conf", "w") as f:
         f.write(conf)
@@ -180,7 +179,7 @@ class _Agent(dbus.service.Object):
 class Adapter:
     """The Deck's Bluetooth adapter while acting as a gamepad. Needs a GLib main loop."""
 
-    def __init__(self, bus):
+    def __init__(self, bus, profile: Profile):
         self.bus = bus
         self.pairing_until = 0.0
         obj = bus.get_object("org.bluez", "/org/bluez/hci0")
@@ -192,7 +191,7 @@ class Adapter:
         bluez = bus.get_object("org.bluez", "/org/bluez")
         dbus.Interface(bluez, "org.bluez.ProfileManager1").RegisterProfile(
             PROFILE_PATH, HID_UUID, {
-                "ServiceRecord": dualsense.SDP_RECORD,
+                "ServiceRecord": profile.sdp_record(),
                 "Role": "server",
                 "RequireAuthentication": False,
                 "RequireAuthorization": False,
@@ -222,6 +221,15 @@ class Adapter:
 
     def pairing_open(self) -> bool:
         return time.monotonic() < self.pairing_until
+
+    def remove_device(self, address: str):
+        """Drop the pairing (link key) for `address`, if any."""
+        path = "/org/bluez/hci0/dev_" + address.upper().replace(":", "_")
+        adapter = dbus.Interface(self.bus.get_object("org.bluez", "/org/bluez/hci0"), "org.bluez.Adapter1")
+        try:
+            adapter.RemoveDevice(path)
+        except dbus.DBusException:
+            pass
 
     def is_paired(self, address: str) -> bool:
         path = "/org/bluez/hci0/dev_" + address.upper().replace(":", "_")

@@ -1,19 +1,16 @@
-"""DualSense (Bluetooth) protocol: descriptors, SDP record and report encoding."""
-import math
+"""Sony DualSense / DualSense Edge over Bluetooth (full 0x31 reports)."""
 import struct
 import time
 import zlib
 
-from .deck import DeckInput
-
-SONY_VID = 0x054C
-DUALSENSE_PID = 0x0CE6
+from ..deck import DeckInput
+from .base import Battery, Encoder, Profile, hat_direction, radial_deadzone
 
 INPUT_REPORT_LEN = 78  # report 0x31 including report ID and CRC
 TOUCH_W, TOUCH_H = 1920, 1080
 
-# Bluetooth HID descriptor: simple report 0x01, full input/output report 0x31
-# and the vendor feature reports hosts read during initialization.
+# DualSense-like Bluetooth HID descriptor: simple report 0x01, full input/output
+# report 0x31 and the vendor feature reports hosts read during initialization.
 DESCRIPTOR = bytes([
     0x05, 0x01, 0x09, 0x05, 0xA1, 0x01,
     # Report 0x01: simple state (9 bytes)
@@ -37,45 +34,6 @@ DESCRIPTOR = bytes([
     0xC0,
 ])
 
-SDP_RECORD = f"""<?xml version="1.0" encoding="UTF-8" ?>
-<record>
-  <attribute id="0x0001"><sequence><uuid value="0x1124" /></sequence></attribute>
-  <attribute id="0x0004"><sequence>
-    <sequence><uuid value="0x0100" /><uint16 value="0x0011" /></sequence>
-    <sequence><uuid value="0x0011" /></sequence>
-  </sequence></attribute>
-  <attribute id="0x0005"><sequence><uuid value="0x1002" /></sequence></attribute>
-  <attribute id="0x0006"><sequence>
-    <uint16 value="0x656e" /><uint16 value="0x006a" /><uint16 value="0x0100" />
-  </sequence></attribute>
-  <attribute id="0x0009"><sequence>
-    <sequence><uuid value="0x1124" /><uint16 value="0x0101" /></sequence>
-  </sequence></attribute>
-  <attribute id="0x000d"><sequence><sequence>
-    <sequence><uuid value="0x0100" /><uint16 value="0x0013" /></sequence>
-    <sequence><uuid value="0x0011" /></sequence>
-  </sequence></sequence></attribute>
-  <attribute id="0x0100"><text value="Wireless Controller" /></attribute>
-  <attribute id="0x0101"><text value="Game Controller" /></attribute>
-  <attribute id="0x0102"><text value="Sony Interactive Entertainment" /></attribute>
-  <attribute id="0x0201"><uint16 value="0x0111" /></attribute>
-  <attribute id="0x0202"><uint8 value="0x08" /></attribute>
-  <attribute id="0x0203"><uint8 value="0x00" /></attribute>
-  <attribute id="0x0204"><boolean value="true" /></attribute>
-  <attribute id="0x0205"><boolean value="true" /></attribute>
-  <attribute id="0x0206"><sequence><sequence>
-    <uint8 value="0x22" /><text encoding="hex" value="{DESCRIPTOR.hex()}" />
-  </sequence></sequence></attribute>
-  <attribute id="0x0207"><sequence><sequence>
-    <uint16 value="0x0409" /><uint16 value="0x0100" />
-  </sequence></sequence></attribute>
-  <attribute id="0x020b"><uint16 value="0x0100" /></attribute>
-  <attribute id="0x020c"><uint16 value="0x0c80" /></attribute>
-  <attribute id="0x020d"><boolean value="false" /></attribute>
-  <attribute id="0x020e"><boolean value="false" /></attribute>
-</record>
-"""
-
 # Deck IMU: gyro 16.384 LSB/(deg/s), accel 16384 LSB/g.
 # The advertised calibration makes gyro pass through 1:1 and accel at half scale.
 GYRO_PLUS, GYRO_SPEED, ACCEL_PLUS = 8847, 540, 8192
@@ -88,39 +46,9 @@ def _with_crc(seed: int, report: bytearray) -> bytes:
     return bytes(report)
 
 
-def feature_report(rid: int, mac: bytes) -> bytes | None:
-    """Feature report `rid` with CRC, or None if unsupported. `mac` is our BT address."""
-    if rid == 0x05:
-        r = bytearray(41)
-        r[0] = 0x05
-        for axis in range(3):
-            struct.pack_into("<hh", r, 7 + axis * 4, GYRO_PLUS, -GYRO_PLUS)
-        struct.pack_into("<hh", r, 19, GYRO_SPEED, GYRO_SPEED)
-        for axis in range(3):
-            struct.pack_into("<hh", r, 23 + axis * 4, ACCEL_PLUS, -ACCEL_PLUS)
-    elif rid == 0x09:
-        r = bytearray(20)
-        r[0] = 0x09
-        r[1:7] = mac[::-1]  # little-endian
-    elif rid == 0x20:
-        r = bytearray(64)
-        r[0] = 0x20
-        r[1:20] = b"Jun 19 202314:47:34"
-        r[24:32] = bytes([0x03, 0x00, 0x04, 0x00, 0x03, 0x06, 0x01, 0x01])
-        r[44:46] = bytes([0x30, 0x06])
-    else:
-        return None
-    return _with_crc(0xA3, r)
-
-
 def _stick(x: int, y: int, deadzone: float) -> tuple[int, int]:
-    """Deck stick (int16, +y up) -> DualSense bytes (0..255, +y down), radial deadzone."""
-    fx, fy = x / 32768.0, y / 32768.0
-    mag = math.hypot(fx, fy)
-    if mag <= deadzone:
-        return 128, 128
-    scale = min(1.0, (mag - deadzone) / (1.0 - deadzone)) / mag
-    fx, fy = fx * scale, fy * scale
+    """Deck stick -> DualSense bytes (0..255, +y down)."""
+    fx, fy = radial_deadzone(x, y, deadzone)
     return (max(0, min(255, round(128 + fx * 127.5))),
             max(0, min(255, round(128 - fy * 127.5))))
 
@@ -136,22 +64,15 @@ def _touch(touching: bool, touch_id: int, x: int, y: int, left_half: bool) -> by
     return bytes([touch_id & 0x7F, tx & 0xFF, ((tx >> 8) & 0x0F) | ((ty & 0x0F) << 4), ty >> 4])
 
 
-_HAT = {
-    (1, 0, 0, 0): 0, (1, 1, 0, 0): 1, (0, 1, 0, 0): 2, (0, 1, 1, 0): 3,
-    (0, 0, 1, 0): 4, (0, 0, 1, 1): 5, (0, 0, 0, 1): 6, (1, 0, 0, 1): 7,
-}
-
-
-class InputEncoder:
-    """Builds DualSense 0x31 input reports from Deck controller state."""
-
-    def __init__(self, deadzone: float = 0.08):
+class DualSenseEncoder(Encoder):
+    def __init__(self, deadzone: float, edge: bool):
         self.deadzone = deadzone
+        self.edge = edge
         self.counter = 0
         self.touch_ids = [0, 1]  # incremented on each new contact
         self.was_touching = [False, False]
 
-    def encode(self, d: DeckInput | None) -> bytes:
+    def encode(self, d: DeckInput | None, battery: Battery) -> bytes:
         r = bytearray(INPUT_REPORT_LEN)
         r[0] = 0x31
         r[1] = (self.counter << 4) & 0xF0
@@ -160,7 +81,10 @@ class InputEncoder:
         st[7] = 0x08  # hat neutral
         st[6] = self.counter
         st[32:40] = bytes([0x80, 0, 0, 0, 0x81, 0, 0, 0])  # no touches
-        st[52] = 0x08  # battery level
+        # Battery: low nibble level 0..10, high nibble 0 discharging / 1 charging / 2 full
+        level = min(10, battery.percent // 10)
+        status = 2 if battery.charging and battery.percent >= 100 else 1 if battery.charging else 0
+        st[52] = (status << 4) | level
         struct.pack_into("<I", st, 27, int(time.monotonic() * 3_000_000) & 0xFFFFFFFF)
         self.counter = (self.counter + 1) & 0xFF
 
@@ -173,8 +97,8 @@ class InputEncoder:
         st[2], st[3] = _stick(d.rx, d.ry, self.deadzone)
         st[4], st[5] = min(255, d.lt >> 7), min(255, d.rt >> 7)
 
-        hat = _HAT.get((d.up, d.right, d.down, d.left), 8)
-        st[7] = (hat
+        hat = hat_direction(d)
+        st[7] = ((8 if hat is None else hat)
                  | (0x10 if d.x else 0) | (0x20 if d.a else 0)
                  | (0x40 if d.b else 0) | (0x80 if d.y else 0))
         st[8] = ((0x01 if d.l1 else 0) | (0x02 if d.r1 else 0)
@@ -183,6 +107,10 @@ class InputEncoder:
                  | (0x40 if d.l3 else 0) | (0x80 if d.r3 else 0))
         st[9] = ((0x01 if d.steam else 0)
                  | (0x02 if d.lpad_click or d.rpad_click else 0))
+        if self.edge:
+            # Upper back buttons -> function buttons, lower back buttons -> paddles
+            st[9] |= ((0x10 if d.l4 else 0) | (0x20 if d.r4 else 0)
+                      | (0x40 if d.l5 else 0) | (0x80 if d.r5 else 0))
 
         # Deck axes -> DualSense axes: (x, z, -y)
         struct.pack_into("<3h", st, 15, d.gx, d.gz, max(-32768, min(32767, -d.gy)))
@@ -196,11 +124,51 @@ class InputEncoder:
             st[32 + 4 * i:36 + 4 * i] = _touch(touching, self.touch_ids[i], x, y, left_half=(i == 0))
 
 
-def parse_rumble(msg: bytes) -> tuple[int, int] | None:
-    """(low_freq, high_freq) motor levels 0..255 from an 0xA2 0x31 output report."""
-    # a2 31 <seq_tag> <tag> <valid_flag0> <valid_flag1> <motor_right> <motor_left> ...
-    if len(msg) < 8 or msg[0] != 0xA2 or msg[1] != 0x31:
-        return None
-    if not msg[4] & 0x03:  # neither compatible vibration nor haptics select
-        return None
-    return msg[7], msg[6]
+class DualSense(Profile):
+    vendor_id = 0x054C
+    bt_name = "DualSense Wireless Controller"
+    service_name = "Wireless Controller"
+    provider = "Sony Interactive Entertainment"
+    descriptor = DESCRIPTOR
+
+    def __init__(self, edge: bool = False):
+        self.edge = edge
+        self.id = "dualsense_edge" if edge else "dualsense"
+        self.label = "PS5 Edge (back buttons)" if edge else "PS5"
+        self.product_id = 0x0DF2 if edge else 0x0CE6
+        if edge:
+            self.bt_name = "DualSense Edge Wireless Controller"
+
+    def new_encoder(self, deadzone: float) -> Encoder:
+        return DualSenseEncoder(deadzone, self.edge)
+
+    def feature_report(self, report_id: int, mac: bytes) -> bytes | None:
+        if report_id == 0x05:
+            r = bytearray(41)
+            r[0] = 0x05
+            for axis in range(3):
+                struct.pack_into("<hh", r, 7 + axis * 4, GYRO_PLUS, -GYRO_PLUS)
+            struct.pack_into("<hh", r, 19, GYRO_SPEED, GYRO_SPEED)
+            for axis in range(3):
+                struct.pack_into("<hh", r, 23 + axis * 4, ACCEL_PLUS, -ACCEL_PLUS)
+        elif report_id == 0x09:
+            r = bytearray(20)
+            r[0] = 0x09
+            r[1:7] = mac[::-1]  # little-endian
+        elif report_id == 0x20:
+            r = bytearray(64)
+            r[0] = 0x20
+            r[1:20] = b"Jun 19 202314:47:34"
+            r[24:32] = bytes([0x03, 0x00, 0x04, 0x00, 0x03, 0x06, 0x01, 0x01])
+            r[44:46] = bytes([0x30, 0x06])
+        else:
+            return None
+        return _with_crc(0xA3, r)
+
+    def parse_rumble(self, msg: bytes) -> tuple[int, int] | None:
+        # a2 31 <seq_tag> <tag> <valid_flag0> <valid_flag1> <motor_right> <motor_left> ...
+        if len(msg) < 8 or msg[0] != 0xA2 or msg[1] != 0x31:
+            return None
+        if not msg[4] & 0x03:  # neither compatible vibration nor haptics select
+            return None
+        return msg[7], msg[6]

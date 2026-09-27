@@ -8,7 +8,7 @@ import threading
 import time
 from typing import Callable
 
-from . import dualsense
+from .profiles import Profile
 
 log = logging.getLogger("sdcd.hid")
 
@@ -63,9 +63,10 @@ class Link:
     """One connected host. run() blocks until the host disconnects or close() is called."""
 
     def __init__(self, ctrl: socket.socket, intr: socket.socket, address: str, mac: bytes,
-                 get_report: Callable[[], bytes], has_urgent: Callable[[], bool],
+                 profile: Profile, get_report: Callable[[], bytes], has_urgent: Callable[[], bool],
                  on_rumble: Callable[[int, int], None]):
         self.ctrl, self.intr, self.address, self.mac = ctrl, intr, address, mac
+        self.profile = profile
         self.get_report = get_report
         self.has_urgent = has_urgent
         self.on_rumble = on_rumble
@@ -150,7 +151,7 @@ class Link:
         kind, param = msg[0] >> 4, msg[0] & 0x0F
         if kind == 0x4:  # GET_REPORT
             rtype, rid = param & 0x3, msg[1] if len(msg) > 1 else 0
-            report = dualsense.feature_report(rid, self.mac) if rtype == 3 else None
+            report = self.profile.feature_report(rid, self.mac) if rtype == 3 else None
             return b"\xA3" + report if report else b"\x02"  # DATA | ERR_INVALID_REPORT_ID
         if kind == 0x5:  # SET_REPORT
             return b"\x00"
@@ -177,7 +178,7 @@ class Link:
                 if header not in logged and len(logged) < 40:  # diagnostics: each distinct header once
                     logged.add(header)
                     log.debug("output report %dB: %s", len(msg), msg[:16].hex(" "))
-                rumble = dualsense.parse_rumble(msg)
+                rumble = self.profile.parse_rumble(msg)
                 if rumble is not None and rumble != last:
                     last = rumble
                     self.on_rumble(*rumble)
