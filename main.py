@@ -12,7 +12,10 @@ import signal
 import decky
 
 SYSTEM_PYTHON = "/usr/bin/python3"
-DEFAULT_OPTIONS = {"screen_off": True, "deadzone": 0.08, "pad_haptics": True, "profile": "dualsense"}
+DEFAULT_OPTIONS = {"screen_off": True, "deadzone": 0.08, "pad_haptics": True, "profile": "dualsense",
+                   "deck_audio": False}
+# Options that change the daemon's Bluetooth identity; changing them restarts it.
+RESTART_OPTIONS = ("profile", "deck_audio")
 # Must match py_modules/sdcd/profiles (the daemon also reports these once running).
 PROFILES = [
     {"id": "dualsense", "label": "PS5"},
@@ -126,8 +129,7 @@ class Plugin:
         self.options[key] = value
         self._save_options()
         self.state = {**self.state, "options": self.options}
-        if key == "profile":
-            # The controller type is the daemon's Bluetooth identity: restart it.
+        if key in RESTART_OPTIONS:
             if self._running():
                 await self.set_enabled(False)
                 await self.set_enabled(True)

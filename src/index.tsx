@@ -31,7 +31,13 @@ type State = {
   target: string | null;
   hosts: Host[];
   screen_off: boolean;
-  options: { screen_off: boolean; deadzone: number; pad_haptics: boolean; profile: string };
+  options: {
+    screen_off: boolean;
+    deadzone: number;
+    pad_haptics: boolean;
+    profile: string;
+    deck_audio: boolean;
+  };
   profiles: ProfileInfo[];
   error: string | null;
 };
@@ -191,6 +197,15 @@ function Content() {
             label="Turn off screen while connected"
             checked={s.options.screen_off}
             onChange={async (v) => setState(await setOption("screen_off", v))}
+          />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ToggleField
+            label="Let your device play sound on the Deck"
+            description="Off keeps sound on your Mac or PC. On lets it use the Deck as a speaker (it may switch to it automatically). Reconnects when changed."
+            checked={s.options.deck_audio}
+            disabled={busy}
+            onChange={(v) => withBusy(() => setOption("deck_audio", v))()}
           />
         </PanelSectionRow>
         <PanelSectionRow>

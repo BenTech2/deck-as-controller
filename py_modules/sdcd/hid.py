@@ -75,6 +75,7 @@ class Link:
         self.new_input = threading.Condition()
         self.sent = self.skipped = 0
         self.unplugged = False  # host removed the pairing (virtual cable unplug)
+        self.last_rumble: tuple[int, int] | None = None
         self.closed_by_host = False  # host disconnected on purpose (vs. link loss)
 
     def notify_input(self):
@@ -154,6 +155,8 @@ class Link:
             report = self.profile.feature_report(rid, self.mac) if rtype == 3 else None
             return b"\xA3" + report if report else b"\x02"  # DATA | ERR_INVALID_REPORT_ID
         if kind == 0x5:  # SET_REPORT
+            if param & 0x3 == 2:  # output report sent on the control channel (e.g. by Steam)
+                self._handle_output(b"\xA2" + msg[1:])
             return b"\x00"
         if kind == 0x6:  # GET_PROTOCOL: report protocol
             return b"\xA0\x01"
@@ -165,23 +168,22 @@ class Link:
             return b"\x00"
         return b"\x03"  # ERR_UNSUPPORTED_REQUEST
 
+    def _handle_output(self, msg: bytes):
+        """An output report from the host (0xA2 + report), from either channel."""
+        log.debug("output report %dB: %s", len(msg), msg[:16].hex(" "))
+        rumble = self.profile.parse_rumble(msg)
+        if rumble is not None and rumble != self.last_rumble:
+            self.last_rumble = rumble
+            self.on_rumble(*rumble)
+
     def _interrupt_rx(self):
-        last = None
-        logged = set()
         try:
             while self.alive.is_set():
                 msg = self.intr.recv(1024)
                 if not msg:
                     self._host_closed()
                     break
-                header = msg[:9]
-                if header not in logged and len(logged) < 40:  # diagnostics: each distinct header once
-                    logged.add(header)
-                    log.debug("output report %dB: %s", len(msg), msg[:16].hex(" "))
-                rumble = self.profile.parse_rumble(msg)
-                if rumble is not None and rumble != last:
-                    last = rumble
-                    self.on_rumble(*rumble)
+                self._handle_output(msg)
         except OSError:
             pass
         self.alive.clear()

@@ -7,8 +7,9 @@ Talks to the Decky plugin over stdio using JSON lines:
                    {"cmd": "options", "screen_off": bool, "deadzone": float, "pad_haptics": bool}
   stdout events:   {"type": "state", ...} | {"type": "error", "message": str}
                    {"type": "stopped", "reason": str}
-The controller type ("profile" option) is fixed for the daemon's lifetime; the
-plugin restarts the daemon to change it.
+The controller type ("profile") and "deck_audio" options set the Bluetooth
+identity, so they're fixed for the daemon's lifetime; the plugin restarts the
+daemon to change them.
 """
 import json
 import logging
@@ -82,7 +83,7 @@ def read_battery() -> Battery:
 class Daemon:
     def __init__(self, settings_dir: str, options: dict):
         self.options = {"screen_off": True, "deadzone": 0.08, "pad_haptics": True,
-                        "profile": DEFAULT_PROFILE, **options}
+                        "profile": DEFAULT_PROFILE, "deck_audio": False, **options}
         self.profile = get_profile(self.options["profile"])
         self.hosts = Hosts(settings_dir)
         self.loop = GLib.MainLoop()
@@ -192,7 +193,7 @@ class Daemon:
         self.emit(type="state", state="starting", host="", target=None, hosts=self.hosts.items,
                   screen_off=False, options=self.options)
         try:
-            bluez.enter_gamepad_mode(self.profile)
+            bluez.enter_gamepad_mode(self.profile, audio=self.options["deck_audio"])
             self.adapter = bluez.Adapter(dbus.SystemBus(), self.profile)
             if not self.target:
                 self.adapter.open_pairing(PAIRING_SECONDS)
