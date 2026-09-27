@@ -1,9 +1,9 @@
 #!/bin/bash
 # Build the plugin and install it on a Steam Deck over SSH (dev loop).
-# Usage: scripts/deploy.sh [deck@host]   (needs passwordless sudo on the Deck)
+# Usage: scripts/deploy.sh deck@<deck-ip>   (or set DECK; needs passwordless sudo on the Deck)
 set -euo pipefail
 
-DECK="${1:-${DECK:-deck@192.168.1.136}}"
+DECK="${1:-${DECK:?usage: scripts/deploy.sh deck@<deck-ip>}}"
 KEY="${DECK_SSH_KEY:-$HOME/.ssh/id_ed25519_steamdeck}"
 NAME="deck-as-controller"
 SSH=(ssh -i "$KEY" "$DECK")

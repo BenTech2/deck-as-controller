@@ -1,6 +1,6 @@
 {
   "name": "deck-as-controller",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Use your Steam Deck as a wireless PS5 controller for a Mac or PC.",
   "type": "module",
   "scripts": {
