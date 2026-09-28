@@ -83,9 +83,34 @@ def enter_gamepad_mode(profile: Profile, audio: bool):
     _restart_bluetoothd()
 
 
+def disconnect_all(settle: float = 2.0):
+    """Disconnect every connected device while bluetoothd is still up.
+
+    Restarting bluetoothd under active Bluetooth audio streams can crash
+    WirePlumber; an orderly disconnect lets PipeWire tear the streams down first.
+    """
+    bus = dbus.SystemBus()
+    manager = dbus.Interface(bus.get_object("org.bluez", "/"), "org.freedesktop.DBus.ObjectManager")
+    disconnected = False
+    for path, interfaces in manager.GetManagedObjects().items():
+        device = interfaces.get("org.bluez.Device1")
+        if device and device.get("Connected"):
+            try:
+                dbus.Interface(bus.get_object("org.bluez", path), "org.bluez.Device1").Disconnect()
+                disconnected = True
+            except dbus.DBusException:
+                pass
+    if disconnected:
+        time.sleep(settle)
+
+
 def restore_stock():
     """Undo enter_gamepad_mode(). Safe to call when not active."""
     if gamepad_mode_active():
+        try:
+            disconnect_all()
+        except dbus.DBusException:
+            pass
         os.remove(DROPIN)
         shutil.rmtree(RUN_DIR, ignore_errors=True)
         _restart_bluetoothd()
