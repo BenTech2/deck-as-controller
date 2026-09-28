@@ -149,6 +149,7 @@ class Link:
             self.closed_by_host = True
 
     def _handle_control(self, msg: bytes) -> bytes:
+        log.debug("control message %dB: %s", len(msg), msg[:16].hex(" "))
         kind, param = msg[0] >> 4, msg[0] & 0x0F
         if kind == 0x4:  # GET_REPORT
             rtype, rid = param & 0x3, msg[1] if len(msg) > 1 else 0

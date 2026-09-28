@@ -2,6 +2,7 @@
 import argparse
 import json
 import logging
+import os
 import sys
 
 parser = argparse.ArgumentParser(prog="sdcd")
@@ -11,7 +12,9 @@ parser.add_argument("--restore", action="store_true",
                     help="undo everything controller mode changes (bluetoothd, controller)")
 args = parser.parse_args()
 
-logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(name)s: %(message)s")
+# Touch /run/sdcd-debug on the Deck to log host output reports and control messages.
+level = logging.DEBUG if os.path.exists("/run/sdcd-debug") else logging.INFO
+logging.basicConfig(stream=sys.stderr, level=level, format="%(name)s: %(message)s")
 
 if args.restore:
     from . import bluez, deck

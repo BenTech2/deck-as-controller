@@ -166,9 +166,15 @@ class DualSense(Profile):
         return _with_crc(0xA3, r)
 
     def parse_rumble(self, msg: bytes) -> tuple[int, int] | None:
-        # a2 31 <seq_tag> <tag> <valid_flag0> <valid_flag1> <motor_right> <motor_left> ...
+        # Two layouts are in use for the common block after a2 31:
+        #   macOS, Linux, SDL3: <seq_tag: seq << 4> <tag 0x10> <common...>
+        #   SDL2:               <0x02>                         <common...>
+        # common = <valid_flag0> <valid_flag1> <motor_right> <motor_left> ...
         if len(msg) < 8 or msg[0] != 0xA2 or msg[1] != 0x31:
             return None
-        if not msg[4] & 0x03:  # neither compatible vibration nor haptics select
-            return None
-        return msg[7], msg[6]
+        sdl2 = bool(msg[2] & 0x0F)
+        common = 3 if sdl2 else 4
+        if not msg[common] & 0x03:  # neither compatible vibration nor haptics select
+            # SDL2 clears the flags when it stops rumble; others mean "not about rumble".
+            return (0, 0) if sdl2 else None
+        return msg[common + 3], msg[common + 2]
