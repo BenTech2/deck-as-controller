@@ -202,7 +202,7 @@ function Content() {
         <PanelSectionRow>
           <ToggleField
             label="Let your device play sound on the Deck"
-            description="Off keeps sound on your Mac or PC. On lets it use the Deck as a speaker (it may switch to it automatically). Reconnects when changed."
+            description="Off keeps sound on your Mac or PC. On lets it use the Deck as a speaker. Your device only picks this up when pairing, so pair again after changing it."
             checked={s.options.deck_audio}
             disabled={busy}
             onChange={(v) => withBusy(() => setOption("deck_audio", v))()}
