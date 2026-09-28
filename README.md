@@ -53,16 +53,13 @@ choose the new type, tap **Pair a new device**, and pair again.
 ### Options
 
 - **Turn off screen while connected**
-- **Let your device play sound on the Deck:** off by default, so the Deck never shows up as a
-  speaker and sound stays on your device. Your device reads this when pairing, so remove the
-  Deck from its Bluetooth settings and pair again after changing it.
 - **Trackpad click feedback:** a small haptic tick when you click a trackpad.
 - **Stick deadzone**
 
 ## Limitations
 
-- While the plugin is on, Bluetooth controllers and keyboards paired to the Deck can't be
-  used (the Deck's Bluetooth is busy being a controller). Bluetooth audio keeps working.
+- While the plugin is on, Bluetooth headphones, controllers and keyboards paired to the Deck
+  can't be used: the Deck's Bluetooth is busy being a controller. Sound stays on your device.
 - Tested with macOS and iPadOS. Windows and Linux should work (both support these
   controllers) but haven't been tested yet.
 

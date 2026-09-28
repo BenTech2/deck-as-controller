@@ -52,12 +52,8 @@ def set_adapter_prop(props: dbus.Interface, name: str, value, attempts: int = 25
             time.sleep(0.2)
 
 
-def enter_gamepad_mode(profile: Profile, audio: bool):
-    """Restart bluetoothd without the input/hostname plugins and with the profile's identity.
-
-    With audio=False the audio plugins are left out too, so hosts can't pick the
-    Deck as a speaker (macOS may otherwise switch its output to it on connect).
-    """
+def enter_gamepad_mode(profile: Profile):
+    """Restart bluetoothd as a gamepad: the profile's identity, no input/hostname/audio plugins."""
     if not gamepad_mode_active() and not os.path.exists(SAVED_ADAPTER):
         props = _adapter_props()
         saved = {name: props.Get("org.bluez.Adapter1", name) for name in SAVED_PROPS}
@@ -75,11 +71,12 @@ def enter_gamepad_mode(profile: Profile, audio: bool):
         f.write(conf)
     # input: frees L2CAP PSMs 0x11/0x13 so we can serve HID ourselves.
     # hostname: stops it overriding our Class/Name from the chassis type.
-    # a2dp, avrcp: the Deck's Bluetooth audio roles (see docstring).
-    disabled = "input,hostname" if audio else "input,hostname,a2dp,avrcp"
+    # a2dp, avrcp: without them hosts can't pick the Deck as a speaker. macOS would
+    # otherwise switch its output to it, and tearing that audio down when we
+    # restore bluetoothd can crash WirePlumber.
     with open(DROPIN, "w") as f:
         f.write("[Service]\nExecStart=\n"
-                f"ExecStart={BLUETOOTHD} -P {disabled} -f {RUN_DIR}/main.conf\n")
+                f"ExecStart={BLUETOOTHD} -P input,hostname,a2dp,avrcp -f {RUN_DIR}/main.conf\n")
     _restart_bluetoothd()
 
 
