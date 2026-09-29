@@ -38,9 +38,17 @@ class Profile:
         """Reply to a GET_REPORT(feature), or None if unsupported. `mac` is our BT address."""
         return None
 
-    def parse_rumble(self, msg: bytes) -> tuple[int, int] | None:
-        """(low_freq, high_freq) motor levels 0..255 from a host output message (0xA2 ...)."""
+    def parse_rumble(self, msg: bytes) -> tuple[int, int, float | None] | None:
+        """(low_freq, high_freq, duration_s) from a host output message (0xA2 ...).
+
+        Motor levels are 0..255. duration_s is how long the host asked for (the
+        rumble stops by itself after it), or None to run until the host says stop.
+        """
         return None
+
+    def side_reports(self, battery: Battery) -> list[bytes]:
+        """Extra input reports (without the 0xA1 header) to send every few seconds."""
+        return []
 
     def sdp_record(self) -> str:
         return f"""<?xml version="1.0" encoding="UTF-8" ?>

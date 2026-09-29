@@ -189,6 +189,7 @@ class DeckController:
         self.lock = threading.Lock()  # serializes control transfers
         self.rumble_wanted = (0, 0)
         self.rumble_applied = (0, 0)
+        self.rumble_until: float | None = None  # monotonic time a timed rumble ends
         self.rumble_event = threading.Event()
 
     def grab(self):
@@ -246,15 +247,20 @@ class DeckController:
             raise
         return bytes(data[:n])
 
-    def rumble(self, low: int, high: int):
-        """Request motor levels 0..255 (low frequency / left, high frequency / right)."""
+    def rumble(self, low: int, high: int, duration: float | None = None):
+        """Request motor levels 0..255 (low frequency / left, high frequency / right),
+        optionally stopping by themselves after `duration` seconds."""
         self.rumble_wanted = (low, high)
+        self.rumble_until = time.monotonic() + duration if duration and (low or high) else None
         self.rumble_event.set()
 
     def _rumble_loop(self):
         while self.fd is not None:
-            self.rumble_event.wait(timeout=1)
+            until = self.rumble_until
+            self.rumble_event.wait(timeout=max(0.0, until - time.monotonic()) if until else 1)
             self.rumble_event.clear()
+            if self.rumble_until and time.monotonic() >= self.rumble_until:
+                self.rumble_wanted, self.rumble_until = (0, 0), None
             wanted = self.rumble_wanted
             if wanted != self.rumble_applied:
                 try:

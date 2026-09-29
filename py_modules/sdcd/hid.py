@@ -64,7 +64,7 @@ class Link:
 
     def __init__(self, ctrl: socket.socket, intr: socket.socket, address: str, mac: bytes,
                  profile: Profile, get_report: Callable[[], bytes], has_urgent: Callable[[], bool],
-                 on_rumble: Callable[[int, int], None]):
+                 on_rumble: Callable[[int, int, float | None], None]):
         self.ctrl, self.intr, self.address, self.mac = ctrl, intr, address, mac
         self.profile = profile
         self.get_report = get_report
@@ -75,7 +75,7 @@ class Link:
         self.new_input = threading.Condition()
         self.sent = self.skipped = 0
         self.unplugged = False  # host removed the pairing (virtual cable unplug)
-        self.last_rumble: tuple[int, int] | None = None
+        self.last_rumble: tuple[int, int] = (0, 0)
         self.closed_by_host = False  # host disconnected on purpose (vs. link loss)
 
     def notify_input(self):
@@ -173,9 +173,20 @@ class Link:
         """An output report from the host (0xA2 + report), from either channel."""
         log.debug("output report %dB: %s", len(msg), msg[:16].hex(" "))
         rumble = self.profile.parse_rumble(msg)
-        if rumble is not None and rumble != self.last_rumble:
-            self.last_rumble = rumble
-            self.on_rumble(*rumble)
+        if rumble is None:
+            return
+        low, high, duration = rumble
+        # Timed rumble is kept alive by repeats, so pass every one on.
+        if duration is not None or (low, high) != self.last_rumble:
+            self.last_rumble = (low, high)
+            self.on_rumble(low, high, duration)
+
+    def send_extra(self, report: bytes):
+        """Send an occasional input report (e.g. battery) without disturbing the stream."""
+        try:
+            self.intr.send(b"\xA1" + report, socket.MSG_DONTWAIT)
+        except (OSError, ValueError):
+            pass
 
     def _interrupt_rx(self):
         try:

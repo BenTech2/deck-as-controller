@@ -91,12 +91,21 @@ class Xbox(Profile):
     def new_encoder(self, deadzone: float) -> Encoder:
         return XboxEncoder(deadzone)
 
-    def parse_rumble(self, msg: bytes) -> tuple[int, int] | None:
-        # a2 03 <enable> <lt> <rt> <strong> <weak> <duration> <delay> <loop>, magnitudes 0..100
+    def parse_rumble(self, msg: bytes) -> tuple[int, int, float | None] | None:
+        # a2 03 <enable> <lt> <rt> <strong> <weak> <duration> <delay> <loop>
+        # Magnitudes 0..100; duration in 10 ms units, played (loop + 1) times.
         # enable bits: 0x01 weak motor, 0x02 strong motor, 0x04/0x08 trigger motors
-        if len(msg) < 7 or msg[0] != 0xA2 or msg[1] != 0x03:
+        if len(msg) < 10 or msg[0] != 0xA2 or msg[1] != 0x03:
             return None
         enable = msg[2]
         low = msg[5] if enable & 0x02 else 0
         high = msg[6] if enable & 0x01 else 0
-        return min(255, low * 255 // 100), min(255, high * 255 // 100)
+        duration = msg[7] * 0.01 * (msg[9] + 1)
+        return min(255, low * 255 // 100), min(255, high * 255 // 100), duration
+
+    def side_reports(self, battery: Battery) -> list[bytes]:
+        # Report 0x04: bits 0-1 level (0 empty .. 3 full), bits 2-3 power source
+        # (0 = wired/charging, non-zero = battery), per SDL's Xbox Bluetooth driver.
+        level = 3 if battery.percent > 70 else 2 if battery.percent > 40 else 1 if battery.percent > 10 else 0
+        source = 0 if battery.charging else 0x04
+        return [bytes([0x04, source | level])]

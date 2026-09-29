@@ -242,6 +242,8 @@ class Daemon:
             self.battery = read_battery()
             link = self.link
             if link:
+                for report in self.profile.side_reports(self.battery):
+                    link.send_extra(report)
                 now = time.monotonic()
                 log.info("link: %.0f reports/s sent, %d skipped (link busy)",
                          link.sent / (now - self.stats_since), link.skipped)
@@ -302,7 +304,7 @@ class Daemon:
             link = hid.Link(ctrl, intr, address, self.adapter.mac_bytes, self.profile,
                             get_report=lambda: encoder.encode(latest.take(), self.battery),
                             has_urgent=lambda: latest.urgent,
-                            on_rumble=lambda low, high: _safe(deck.rumble, low, high))
+                            on_rumble=lambda low, high, duration: _safe(deck.rumble, low, high, duration))
             self.link = link
             self.encoder = encoder
             self.session_thread = threading.Thread(target=self._session, args=(link, deck, latest),
@@ -329,6 +331,8 @@ class Daemon:
             threading.Thread(target=self._read_deck, args=(link, deck, latest), daemon=True,
                              name="deck-reader").start()
             self.stats_since = time.monotonic()
+            for report in self.profile.side_reports(self.battery):
+                link.send_extra(report)
             link.run()
         finally:
             deck.release()
