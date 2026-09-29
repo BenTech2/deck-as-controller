@@ -4,7 +4,7 @@ from .dualsense import DualSense
 from .xbox import Xbox
 
 PROFILES: dict[str, Profile] = {p.id: p for p in (DualSense(), DualSense(edge=True), Xbox())}
-DEFAULT_PROFILE = "dualsense"
+DEFAULT_PROFILE = "dualsense_edge"
 
 
 def get_profile(profile_id: str) -> Profile:
