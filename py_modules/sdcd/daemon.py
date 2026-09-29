@@ -374,6 +374,7 @@ class Daemon:
                 for left, (was, now_down) in ((True, (pads_clicked[0], clicked[0])),
                                               (False, (pads_clicked[1], clicked[1]))):
                     if now_down and not was:
+                        log.debug("trackpad click (%s): haptic tick", "left" if left else "right")
                         _safe(deck.click_pulse, left)
             pads_clicked = clicked
 
