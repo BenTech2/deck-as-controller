@@ -1,10 +1,12 @@
-# Deck as Controller
+# Deck as Controller. (beta build)
 
 https://github.com/user-attachments/assets/c8854f73-ec46-4d12-9bf5-65d40b09f82e
 
 A [Decky Loader](https://decky.xyz) plugin that turns your Steam Deck into a wireless Bluetooth
 controller for your Mac or iPad. Nothing needs to be installed on the other device: the Deck
 pairs as a PS5 or Xbox controller.
+
+**This is still a very early build, expect latency and connection issues, specially with untested devices.**
 
 Tested on a Steam Deck OLED (SteamOS, Decky Loader 3.2) with a Mac running macOS 27 and an
 iPad Mini 7 running iOS 27.
