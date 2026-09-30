@@ -44,7 +44,7 @@ _L = {
     "lpad_touch": 0x80000, "rpad_touch": 0x100000,
     "l3": 0x400000, "r3": 0x4000000,
 }
-_H = {"l4": 0x200, "r4": 0x400, "qam": 0x40000}
+_H = {"l4": 0x200, "r4": 0x400, "lstick_touch": 0x4000, "rstick_touch": 0x8000, "qam": 0x40000}
 
 
 @dataclass
@@ -75,6 +75,8 @@ class DeckInput:
     rpad_click: bool = False
     lpad_touch: bool = False
     rpad_touch: bool = False
+    lstick_touch: bool = False
+    rstick_touch: bool = False
     lx: int = 0
     ly: int = 0
     rx: int = 0
@@ -85,6 +87,8 @@ class DeckInput:
     lpad_y: int = 0
     rpad_x: int = 0
     rpad_y: int = 0
+    lpad_pressure: int = 0
+    rpad_pressure: int = 0
     ax: int = 0
     ay: int = 0
     az: int = 0
@@ -102,6 +106,7 @@ class DeckInput:
         s.ax, s.ay, s.az, s.gx, s.gy, s.gz = struct.unpack_from("<6h", d, 24)
         s.lt, s.rt = struct.unpack_from("<HH", d, 44)
         s.lx, s.ly, s.rx, s.ry = struct.unpack_from("<4h", d, 48)
+        s.lpad_pressure, s.rpad_pressure = struct.unpack_from("<HH", d, 56)
         return s
 
 

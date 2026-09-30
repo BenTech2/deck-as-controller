@@ -78,6 +78,15 @@ class Link:
         self.last_rumble: tuple[int, int] = (0, 0)
         self.closed_by_host = False  # host disconnected on purpose (vs. link loss)
 
+    ready = True  # connected and able to take input (BLE links wait for pairing first)
+
+    def wait_ready(self, timeout: float) -> bool:
+        return True
+
+    def _packet(self, report: bytes) -> bytes:
+        """An input report as sent on the interrupt channel."""
+        return b"\xA1" + report
+
     def notify_input(self):
         with self.new_input:
             self.new_input.notify()
@@ -117,7 +126,7 @@ class Link:
                     time.sleep(0.0005)  # poll for the controller's ack
                     continue
                 try:
-                    self.intr.send(b"\xA1" + self.get_report(), socket.MSG_DONTWAIT)
+                    self.intr.send(self._packet(self.get_report()), socket.MSG_DONTWAIT)
                 except BlockingIOError:
                     self.skipped += 1
                     time.sleep(0.0005)

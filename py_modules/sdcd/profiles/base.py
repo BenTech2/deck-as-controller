@@ -17,6 +17,13 @@ class Encoder:
     def encode(self, state: DeckInput | None, battery: Battery) -> bytes:
         raise NotImplementedError
 
+    def set_feature(self, report_id: int, data: bytes):
+        """A SET_REPORT(feature) from the host (BLE profiles; `data` has no report ID)."""
+
+    def get_feature(self, report_id: int) -> bytes | None:
+        """Reply to a GET_REPORT(feature) (BLE profiles; without the report ID)."""
+        return None
+
 
 class Profile:
     """An emulated controller type: its Bluetooth identity and report protocol."""
@@ -30,6 +37,10 @@ class Profile:
     service_name: str
     provider: str
     descriptor: bytes  # HID report descriptor
+    transport: str = "classic"  # "classic": Bluetooth HID, "ble": HID over GATT
+
+    def personalize(self, mac: bytes):
+        """Derive per-Deck identity (name, serial) from our public BT address, before use."""
 
     def new_encoder(self, deadzone: float) -> Encoder:
         raise NotImplementedError

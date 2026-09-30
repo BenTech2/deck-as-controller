@@ -16,8 +16,12 @@ iPad Mini 7 running iOS 27.
 
 ## Features
 
-- **Three controller types:** PS5 (DualSense), PS5 Edge, and Xbox Elite Series 2. PS5 Edge
-  carries all four Deck back buttons.
+- **Four controller types:** PS5 (DualSense), PS5 Edge, Xbox Elite Series 2, and Steam
+  Controller. PS5 Edge carries all four Deck back buttons.
+- **Steam Controller type (experimental):** the Deck pairs over Bluetooth LE as a Steam
+  Controller (2026), so Steam on the other device drives it with Steam Input: both trackpads
+  (position, click and pressure), gyro, all four back buttons and capacitive stick touch,
+  configurable with Steam's controller layouts like the real thing.
 - **Deck screen off while connected.** Tap **⋯** to toggle it; hold **⋯** for 2 seconds to stop
   and get the Deck's screen and controls back.
 - **Reconnects automatically** to the last device when you turn the plugin on.
@@ -67,17 +71,24 @@ On a Mac, **PS5 Edge** is the best all-round choice. Tested results:
 | Back buttons                                                            | PS5 Edge       | not tested      |
 | iPad                                                                    | not tested     | ✅              |
 
+**Steam Controller** is for Steam on the other device: it only works through Steam (or games
+built on SDL 3, which knows the controller). It needs a device whose Bluetooth supports LE,
+which all current Macs and PCs do. It hasn't been tested on real hosts yet; see
+[Steam Controller](#steam-controller-experimental) below.
+
 ### Button mapping
 
-| Deck           | PS5 / PS5 Edge           | Xbox Elite              |
-| -------------- | ------------------------ | ----------------------- |
-| A B X Y        | ✕ ○ □ △                  | A B X Y                 |
-| View / Menu    | Create / Options         | View / Menu             |
-| Steam          | PS                       | Xbox                    |
-| Trackpad click | Touchpad click           | –                       |
-| L4 / R4        | Edge left / right Fn     | Paddles P3 / P1         |
-| L5 / R5        | Edge left / right paddle | Paddles P4 / P2         |
-| ⋯              | reserved for the plugin  | reserved for the plugin |
+| Deck           | PS5 / PS5 Edge           | Xbox Elite              | Steam Controller             |
+| -------------- | ------------------------ | ----------------------- | ---------------------------- |
+| A B X Y        | ✕ ○ □ △                  | A B X Y                 | A B X Y                      |
+| View / Menu    | Create / Options         | View / Menu             | View / Menu                  |
+| Steam          | PS                       | Xbox                    | Steam                        |
+| Trackpads      | Touchpad (both halves)   | –                       | Left / right trackpad        |
+| Trackpad click | Touchpad click           | –                       | Left / right trackpad click  |
+| Stick touch    | –                        | –                       | Left / right stick touch     |
+| L4 / R4        | Edge left / right Fn     | Paddles P3 / P1         | L4 / R4 (upper grip buttons) |
+| L5 / R5        | Edge left / right paddle | Paddles P4 / P2         | L5 / R5 (lower grip buttons) |
+| ⋯              | reserved for the plugin  | reserved for the plugin | reserved for the plugin      |
 
 ### Options
 
@@ -100,6 +111,32 @@ On a Mac, **PS5 Edge** is the best all-round choice. Tested results:
 - **Turning the plugin on or off restarts the Deck's Bluetooth**, which drops any Bluetooth
   devices connected to the Deck for a moment.
 
+## Steam Controller (experimental)
+
+The Deck presents itself exactly like a Steam Controller (2026) connected over Bluetooth: USB
+IDs `28DE:1303`, the real controller's HID report map, and the replies Steam checks when a
+controller connects (a unit serial starting with `F`, controller attributes). Each Deck gets
+its own serial and Bluetooth LE address, derived from its Bluetooth address, so a host keeps
+recognizing it across sessions.
+
+To pair, choose **Steam Controller**, turn the plugin on, and connect to
+"Steam Ctrl (BT) FXA…" in the other device's Bluetooth settings. Steam should then list a
+Steam Controller, and **Controller Settings** lets you lay it out like any Steam Controller.
+
+What to expect:
+
+- **Steam's own haptics** (the trackpad ticks Steam plays) don't arrive: Steam only sends those
+  to Steam Controllers on USB or the wireless Puck, not over Bluetooth. The plugin's own
+  **Trackpad click feedback** still ticks the Deck's pads. Game rumble works.
+- **Tested so far:** protocol-level only (a simulated host). Real hosts, especially Steam on
+  macOS and Windows over plain Bluetooth, still need testing; reports are very welcome.
+- The Deck's Bluetooth runs in LE-only mode while this type is on, and is restored when you
+  turn the plugin off.
+
+Built from public sources: SDL's Steam Controller driver, Linux's `hid-steam`, and the
+reverse-engineering notes of [openpuck](https://github.com/safijari/openpuck),
+[sc26re](https://github.com/mwdmwd/sc26re) and [spoofdeck](https://github.com/phly95/spoofdeck).
+
 ## How it works
 
 The plugin's backend runs a small daemon with the Deck's system Python:
@@ -107,6 +144,9 @@ The plugin's backend runs a small daemon with the Deck's system Python:
 - **Bluetooth:** restarts BlueZ with a runtime-only config (under `/run`) that frees the HID
   channels and gives the Deck a gamepad identity, then serves the Bluetooth HID profile itself.
   Stopping the plugin, or rebooting, restores the stock setup.
+- **Bluetooth LE (Steam Controller):** switches the adapter to LE only on a static random
+  address and serves HID over GATT from its own small ATT server (`ble.py`); BlueZ still
+  handles pairing and advertising.
 - **Input:** takes exclusive access to the built-in controller over USB, so Steam on the Deck
   stops reacting to it, and translates its reports into the chosen controller's format.
 - **Profiles:** `py_modules/sdcd/profiles/` defines each controller type: its Bluetooth

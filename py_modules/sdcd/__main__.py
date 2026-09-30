@@ -17,8 +17,9 @@ level = logging.DEBUG if os.path.exists("/run/sdcd-debug") else logging.INFO
 logging.basicConfig(stream=sys.stderr, level=level, format="%(name)s: %(message)s")
 
 if args.restore:
-    from . import bluez, deck
+    from . import ble, bluez, deck
     deck.rebind_all()
+    ble.leave_le_mode()
     bluez.restore_stock()
 else:
     from .daemon import Daemon

@@ -23,13 +23,14 @@ import dbus
 import dbus.mainloop.glib
 from gi.repository import GLib
 
-from . import bluez, hid
+from . import ble, bluez, hid
 from .deck import DeckController, DeckInput, SharedInput, rebind_all
 from .profiles import DEFAULT_PROFILE, PROFILES, Battery, Encoder, get_profile
 
 log = logging.getLogger("sdcd")
 
 PAIRING_SECONDS = 180
+BLE_SETUP_SECONDS = 30  # for an LE host to pair (or re-encrypt) and subscribe to input
 RECONNECT_INTERVAL = 5.0
 QAM_TAP_MAX = 0.6  # seconds: tap ⋯ toggles the screen
 QAM_HOLD_STOP = 2.0  # seconds: hold ⋯ stops controller mode
@@ -85,6 +86,8 @@ class Daemon:
                         "profile": DEFAULT_PROFILE, **options}
         self.profile = get_profile(self.options["profile"])
         self.hosts = Hosts(settings_dir)
+        self.ble = self.profile.transport == "ble"
+        self.subscriptions = ble.Subscriptions(os.path.join(settings_dir, "ble-subscriptions.json"))
         self.loop = GLib.MainLoop()
         self.out_lock = threading.Lock()
         self.link_lock = threading.Lock()
@@ -116,7 +119,7 @@ class Daemon:
             sys.stdout.flush()
 
     def emit_state(self):
-        if self.link:
+        if self.link and self.link.ready:
             state = "connected"
         elif self.adapter and self.adapter.pairing_open():
             state = "pairing"
@@ -177,6 +180,7 @@ class Daemon:
         if self.link and self.link.address == address:
             self.link.close()
         self.hosts.forget(address)
+        self.subscriptions.forget(address)
         if self.target == address:
             self.target = next((h["address"] for h in self.hosts.items
                                 if h["profile"] == self.profile.id), None)
@@ -192,11 +196,20 @@ class Daemon:
         self.emit(type="state", state="starting", host="", target=None, hosts=self.hosts.items,
                   screen_off=False, options=self.options)
         try:
-            bluez.enter_gamepad_mode(self.profile)
-            self.adapter = bluez.Adapter(dbus.SystemBus(), self.profile)
+            if self.ble:
+                self.profile.personalize(bluez.adapter_address())
+                bluez.enter_gamepad_mode(self.profile, ble.MAIN_CONF)
+                ble.enter_le_mode(self.profile.static_address)
+                self.adapter = ble.Adapter(dbus.SystemBus(), self.profile)
+                # LE hosts reconnect by themselves when they see us advertise.
+                loops = (self._stdin_loop, self._ble_listen_loop)
+            else:
+                bluez.enter_gamepad_mode(self.profile)
+                self.adapter = bluez.Adapter(dbus.SystemBus(), self.profile)
+                loops = (self._stdin_loop, self._listen_loop, self._reconnect_loop)
             if not self.target:
                 self.adapter.open_pairing(PAIRING_SECONDS)
-            for target in (self._stdin_loop, self._listen_loop, self._reconnect_loop):
+            for target in loops:
                 threading.Thread(target=target, daemon=True, name=target.__name__).start()
             GLib.timeout_add_seconds(2, self._tick)
             self.emit_state()
@@ -228,6 +241,10 @@ class Daemon:
         if self.session_thread:
             self.session_thread.join(timeout=3)
         rebind_all()
+        try:
+            ble.leave_le_mode()
+        except Exception:
+            log.exception("restoring Bluetooth Classic failed")
         try:
             bluez.restore_stock()
         except Exception:
@@ -274,7 +291,14 @@ class Daemon:
                 ctrl.close()
                 intr.close()
                 continue
-            self._start_session(ctrl, intr, address)
+            self._start_session(address, ctrl, intr)
+
+    def _ble_listen_loop(self):
+        """LE hosts connecting to our ATT channel: first pairing, or a paired host reconnecting."""
+        server = ble.listen(self.profile.static_address)
+        while not self.stopping.is_set():
+            sock, peer = server.accept()
+            self._start_session(peer[0], sock)
 
     def _reconnect_loop(self):
         """Reconnect to the target host while not connected (like a real controller)."""
@@ -290,21 +314,27 @@ class Daemon:
             except OSError as e:
                 log.info("reconnect to %s failed: %s", address, e)
                 continue
-            self._start_session(ctrl, intr, address)
+            self._start_session(address, ctrl, intr)
 
-    def _start_session(self, ctrl, intr, address: str):
+    def _start_session(self, address: str, ctrl, intr=None):
+        """Start a session on a new connection: HID control + interrupt, or (LE) one ATT socket."""
         with self.link_lock:
             if self.link or self.stopping.is_set():
-                ctrl.close()
-                intr.close()
+                for s in (ctrl, intr):
+                    if s:
+                        s.close()
                 return
             deck = DeckController()
             encoder = self.profile.new_encoder(self.options["deadzone"])
             latest = SharedInput()
-            link = hid.Link(ctrl, intr, address, self.adapter.mac_bytes, self.profile,
-                            get_report=lambda: encoder.encode(latest.take(), self.battery),
-                            has_urgent=lambda: latest.urgent,
-                            on_rumble=lambda low, high, duration: _safe(deck.rumble, low, high, duration))
+            io = dict(get_report=lambda: encoder.encode(latest.take(), self.battery),
+                      has_urgent=lambda: latest.urgent,
+                      on_rumble=lambda low, high, duration: _safe(deck.rumble, low, high, duration))
+            if intr is None:
+                link = ble.Link(ctrl, address, self.profile, encoder, battery=lambda: self.battery,
+                                subscriptions=self.subscriptions, **io)
+            else:
+                link = hid.Link(ctrl, intr, address, self.adapter.mac_bytes, self.profile, **io)
             self.link = link
             self.encoder = encoder
             self.session_thread = threading.Thread(target=self._session, args=(link, deck, latest),
@@ -312,6 +342,15 @@ class Daemon:
             self.session_thread.start()
 
     def _session(self, link: hid.Link, deck: DeckController, latest: SharedInput):
+        if not link.wait_ready(BLE_SETUP_SECONDS):
+            log.info("%s connected but didn't pair and subscribe in time; dropping it", link.address)
+            link.close()
+            with self.link_lock:
+                self.link = None
+                self.encoder = None
+            self.emit_state()
+            return
+        GLib.idle_add(self.adapter.set_connected, True)
         name = self.adapter.device_name(link.address)
         self.link_name = name
         self.hosts.remember(link.address, name, self.profile.id)
@@ -336,6 +375,7 @@ class Daemon:
             link.run()
         finally:
             deck.release()
+            GLib.idle_add(self.adapter.set_connected, False)
             self.screen_off = False
             with self.link_lock:
                 self.link = None

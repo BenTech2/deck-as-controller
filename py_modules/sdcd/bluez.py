@@ -52,7 +52,13 @@ def set_adapter_prop(props: dbus.Interface, name: str, value, attempts: int = 25
             time.sleep(0.2)
 
 
-def enter_gamepad_mode(profile: Profile):
+def adapter_address() -> bytes:
+    """Our public Bluetooth address (ask while stock bluetoothd is running)."""
+    address = str(_adapter_props().Get("org.bluez.Adapter1", "Address"))
+    return bytes(int(b, 16) for b in address.split(":"))
+
+
+def enter_gamepad_mode(profile: Profile, extra_conf: str = ""):
     """Restart bluetoothd as a gamepad: the profile's identity, no input/hostname/audio plugins."""
     if not gamepad_mode_active() and not os.path.exists(SAVED_ADAPTER):
         props = _adapter_props()
@@ -67,16 +73,18 @@ def enter_gamepad_mode(profile: Profile):
                 f"DeviceID = usb:{profile.vendor_id:04X}:{profile.product_id:04X}:{profile.version:04X}\n"
                 f"Name = {profile.bt_name}\n")
     conf = conf.replace("[General]\n", identity, 1) if "[General]\n" in conf else identity + conf
+    conf += "\n" + extra_conf
     with open(f"{RUN_DIR}/main.conf", "w") as f:
         f.write(conf)
     # input: frees L2CAP PSMs 0x11/0x13 so we can serve HID ourselves.
+    # hog: the Deck acting as an LE HID host; unused while it is a controller.
     # hostname: stops it overriding our Class/Name from the chassis type.
     # a2dp, avrcp: without them hosts can't pick the Deck as a speaker. macOS would
     # otherwise switch its output to it, and tearing that audio down when we
     # restore bluetoothd can crash WirePlumber.
     with open(DROPIN, "w") as f:
         f.write("[Service]\nExecStart=\n"
-                f"ExecStart={BLUETOOTHD} -P input,hostname,a2dp,avrcp -f {RUN_DIR}/main.conf\n")
+                f"ExecStart={BLUETOOTHD} -P input,hog,hostname,a2dp,avrcp -f {RUN_DIR}/main.conf\n")
     _restart_bluetoothd()
 
 
@@ -214,10 +222,20 @@ class Adapter:
         self.props = dbus.Interface(obj, "org.freedesktop.DBus.Properties")
         self.address = str(self.props.Get("org.bluez.Adapter1", "Address"))
 
-        _Profile(bus, PROFILE_PATH)
         _Agent(bus, AGENT_PATH, self)
+        self._register(profile)
         bluez = bus.get_object("org.bluez", "/org/bluez")
-        dbus.Interface(bluez, "org.bluez.ProfileManager1").RegisterProfile(
+        agents = dbus.Interface(bluez, "org.bluez.AgentManager1")
+        agents.RegisterAgent(AGENT_PATH, "NoInputNoOutput")
+        agents.RequestDefaultAgent(AGENT_PATH)
+        # Stored alias would override the Name from main.conf.
+        self._set("Alias", "")
+        self.close_pairing()
+
+    def _register(self, profile: Profile):
+        """Publish the HID service (SDP record)."""
+        _Profile(self.bus, PROFILE_PATH)
+        dbus.Interface(self.bus.get_object("org.bluez", "/org/bluez"), "org.bluez.ProfileManager1").RegisterProfile(
             PROFILE_PATH, HID_UUID, {
                 "ServiceRecord": profile.sdp_record(),
                 "Role": "server",
@@ -225,12 +243,9 @@ class Adapter:
                 "RequireAuthorization": False,
                 "AutoConnect": False,
             })
-        agents = dbus.Interface(bluez, "org.bluez.AgentManager1")
-        agents.RegisterAgent(AGENT_PATH, "NoInputNoOutput")
-        agents.RequestDefaultAgent(AGENT_PATH)
-        # Stored alias would override the Name from main.conf.
-        self._set("Alias", "")
-        self.close_pairing()
+
+    def set_connected(self, connected: bool):
+        """A host connected or went away (LE advertising follows this)."""
 
     @property
     def mac_bytes(self) -> bytes:
