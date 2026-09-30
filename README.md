@@ -1,16 +1,16 @@
 # Deck as Controller
 
-
 https://github.com/user-attachments/assets/c8854f73-ec46-4d12-9bf5-65d40b09f82e
-
-
 
 A [Decky Loader](https://decky.xyz) plugin that turns your Steam Deck into a wireless Bluetooth
 controller for your Mac or iPad. Nothing needs to be installed on the other device: the Deck
 pairs as a PS5 or Xbox controller.
 
 Tested on a Steam Deck OLED (SteamOS, Decky Loader 3.2) with a Mac running macOS 27 and an
-iPad Mini 7 running ios 27.
+iPad Mini 7 running iOS 27.
+
+> **Independent project.** Deck as Controller is developed independently and is free. It isn't
+> affiliated with, endorsed by, or sponsored by Valve Corporation.
 
 ## Features
 
@@ -120,3 +120,27 @@ scripts/package.sh                 # build out/deck-as-controller.zip
 
 To log what the host sends (rumble, setup requests), run `sudo touch /run/sdcd-debug` on the
 Deck before turning the plugin on; the output appears in Decky's plugin log.
+
+## Contributing
+
+Contributions are welcome: bug reports, pull requests, and test results on devices we haven't
+tried yet (Windows, Linux, Android, other macOS and iPadOS versions, the original LCD Steam Deck).
+
+When reporting a problem, please include your Deck model, the controller type you picked, the
+device you connected to, and the plugin log from `~/homebrew/logs/deck-as-controller/` on the
+Deck. To capture what your device sends to the Deck, see the debug tip under
+[Development](#development).
+
+## License
+
+Released under the [MIT License](LICENSE).
+
+## Disclaimer
+
+Steam and Steam Deck are trademarks of Valve Corporation. PlayStation, DualSense and PS5 are
+trademarks of Sony Interactive Entertainment. Xbox and Xbox Elite are trademarks of Microsoft.
+Mac and iPad are trademarks of Apple. These names are used only to describe compatibility; this
+project isn't affiliated with or endorsed by any of these companies.
+
+The plugin changes the Deck's Bluetooth setup and takes over its built-in controller while it
+runs. Both are restored when you turn it off or reboot. Use it at your own risk.
