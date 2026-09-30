@@ -259,14 +259,6 @@ class Adapter:
         except dbus.DBusException:
             pass
 
-    def is_paired(self, address: str) -> bool:
-        path = "/org/bluez/hci0/dev_" + address.upper().replace(":", "_")
-        try:
-            props = dbus.Interface(self.bus.get_object("org.bluez", path), "org.freedesktop.DBus.Properties")
-            return bool(props.Get("org.bluez.Device1", "Paired"))
-        except dbus.DBusException:
-            return False
-
     def device_name(self, address: str) -> str:
         path = "/org/bluez/hci0/dev_" + address.upper().replace(":", "_")
         try:
