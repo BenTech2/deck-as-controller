@@ -12,7 +12,8 @@ import signal
 import decky
 
 SYSTEM_PYTHON = "/usr/bin/python3"
-DEFAULT_OPTIONS = {"screen_off": True, "deadzone": 0.08, "pad_haptics": True, "profile": "dualsense_edge"}
+DEFAULT_OPTIONS = {"screen_off": True, "deadzone": 0.08, "pad_haptics": True, "keep_awake": True,
+                   "profile": "dualsense_edge"}
 # Options that change the daemon's Bluetooth identity; changing them restarts it.
 RESTART_OPTIONS = ("profile",)
 # Must match py_modules/sdcd/profiles (the daemon also reports these once running).

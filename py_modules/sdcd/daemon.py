@@ -4,7 +4,8 @@ Talks to the Decky plugin over stdio using JSON lines:
   stdin  commands: {"cmd": "pair"} | {"cmd": "stop"} | {"cmd": "screen"}
                    {"cmd": "connect", "address": str (optional)}
                    {"cmd": "forget", "address": str}
-                   {"cmd": "options", "screen_off": bool, "deadzone": float, "pad_haptics": bool}
+                   {"cmd": "options", "screen_off": bool, "deadzone": float, "pad_haptics": bool,
+                   "keep_awake": bool}
   stdout events:   {"type": "state", ...} | {"type": "error", "message": str}
                    {"type": "stopped", "reason": str}
 The controller type ("profile") sets the Bluetooth identity, so it's fixed for
@@ -35,7 +36,7 @@ RECONNECT_INTERVAL = 5.0
 QAM_TAP_MAX = 0.6  # seconds: tap ⋯ toggles the screen
 QAM_HOLD_STOP = 2.0  # seconds: hold ⋯ stops controller mode
 BATTERY = "/sys/class/power_supply/BAT1"
-RUNTIME_OPTIONS = ("screen_off", "deadzone", "pad_haptics")
+RUNTIME_OPTIONS = ("screen_off", "deadzone", "pad_haptics", "keep_awake")
 
 
 class Hosts:
@@ -82,7 +83,7 @@ def read_battery() -> Battery:
 
 class Daemon:
     def __init__(self, settings_dir: str, options: dict):
-        self.options = {"screen_off": True, "deadzone": 0.08, "pad_haptics": True,
+        self.options = {"screen_off": True, "deadzone": 0.08, "pad_haptics": True, "keep_awake": True,
                         "profile": DEFAULT_PROFILE, **options}
         self.profile = get_profile(self.options["profile"])
         self.hosts = Hosts(settings_dir)
@@ -156,6 +157,8 @@ class Daemon:
                 self.options.update({k: v for k, v in msg.items() if k in RUNTIME_OPTIONS})
                 if self.encoder:
                     self.encoder.deadzone = self.options["deadzone"]
+                if "keep_awake" in msg and self.link and self.link.ready:
+                    self._update_awake()
                 self.emit_state()
         self.stop("plugin went away")
 
@@ -353,7 +356,7 @@ class Daemon:
             self.emit_state()
             return
         GLib.idle_add(self.adapter.set_connected, True)
-        self.awake.hold()  # Steam sees no input from us and would otherwise suspend the Deck
+        self._update_awake()
         name = self.adapter.device_name(link.address)
         self.link_name = name
         self.hosts.remember(link.address, name, self.profile.id)
@@ -394,6 +397,13 @@ class Daemon:
             elif link.closed_by_host:
                 self.auto_reconnect = False
             self.emit_state()
+
+    def _update_awake(self):
+        # Steam sees no input while we hold the controller, so its idle timer would suspend the Deck.
+        if self.options["keep_awake"]:
+            self.awake.hold()
+        else:
+            self.awake.release()
 
     def _read_deck(self, link: hid.Link, deck: DeckController, latest: SharedInput):
         qam_down_at = None

@@ -35,6 +35,7 @@ type State = {
     screen_off: boolean;
     deadzone: number;
     pad_haptics: boolean;
+    keep_awake: boolean;
     profile: string;
   };
   profiles: ProfileInfo[];
@@ -204,6 +205,14 @@ function Content() {
             description="A small haptic tick when you click a trackpad."
             checked={s.options.pad_haptics}
             onChange={async (v) => setState(await setOption("pad_haptics", v))}
+          />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ToggleField
+            label="Stay awake while connected"
+            description="Don't let the Deck auto-sleep while it's a controller. The power button still puts it to sleep."
+            checked={s.options.keep_awake}
+            onChange={async (v) => setState(await setOption("keep_awake", v))}
           />
         </PanelSectionRow>
         <PanelSectionRow>

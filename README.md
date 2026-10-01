@@ -25,7 +25,7 @@ iPad Mini 7 running iOS 27.
 - **Deck screen off while connected.** Tap **⋯** to toggle it; hold **⋯** for 2 seconds to stop
   and get the Deck's screen and controls back.
 - **Stays awake while connected.** The Deck doesn't auto-sleep while it's someone's
-  controller; press the power button to put it to sleep yourself.
+  controller (you can turn this off); press the power button to put it to sleep yourself.
 - **Reconnects automatically** to the last device when you turn the plugin on.
 - **Remembers your devices:** pair more than one (e.g. a Mac and an iPad).
 - **Rumble** (see the table below for where it works).
@@ -97,6 +97,8 @@ which all current Macs and PCs do. It hasn't been tested on real hosts yet; see
 - **Turn off screen while connected**
 - **Trackpad click feedback:** the haptic tick when you click a trackpad.
 - **Stick deadzone**
+- **Stay awake while connected:** stops the Deck's sleep timer while a device is connected.
+  Without it the Deck sleeps after its usual idle time, since Steam on the Deck sees no input.
 
 ## Known limitations
 
