@@ -24,6 +24,8 @@ iPad Mini 7 running iOS 27.
   configurable with Steam's controller layouts like the real thing.
 - **Deck screen off while connected.** Tap **⋯** to toggle it; hold **⋯** for 2 seconds to stop
   and get the Deck's screen and controls back.
+- **Stays awake while connected.** The Deck doesn't auto-sleep while it's someone's
+  controller; press the power button to put it to sleep yourself.
 - **Reconnects automatically** to the last device when you turn the plugin on.
 - **Remembers your devices:** pair more than one (e.g. a Mac and an iPad).
 - **Rumble** (see the table below for where it works).

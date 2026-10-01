@@ -23,7 +23,7 @@ import dbus
 import dbus.mainloop.glib
 from gi.repository import GLib
 
-from . import ble, bluez, hid
+from . import awake, ble, bluez, hid
 from .deck import DeckController, DeckInput, SharedInput, rebind_all
 from .profiles import DEFAULT_PROFILE, PROFILES, Battery, Encoder, get_profile
 
@@ -99,6 +99,7 @@ class Daemon:
         self.reconnect_now = threading.Event()
         self.stop_reason = "stopped"
         self.adapter: bluez.Adapter | None = None
+        self.awake = awake.StayAwake()
         self.last_state: dict | None = None
         # Deck screen blanking is drawn by the plugin frontend; we only own the flag.
         self.screen_off = False
@@ -209,7 +210,7 @@ class Daemon:
                 loops = (self._stdin_loop, self._listen_loop, self._reconnect_loop)
             if not self.target:
                 self.adapter.open_pairing(PAIRING_SECONDS)
-            for target in loops:
+            for target in loops + (self.awake.watch_power_button,):
                 threading.Thread(target=target, daemon=True, name=target.__name__).start()
             GLib.timeout_add_seconds(2, self._tick)
             self.emit_state()
@@ -240,6 +241,7 @@ class Daemon:
             self.link.close()
         if self.session_thread:
             self.session_thread.join(timeout=3)
+        self.awake.release()
         rebind_all()
         try:
             ble.leave_le_mode()
@@ -351,6 +353,7 @@ class Daemon:
             self.emit_state()
             return
         GLib.idle_add(self.adapter.set_connected, True)
+        self.awake.hold()  # Steam sees no input from us and would otherwise suspend the Deck
         name = self.adapter.device_name(link.address)
         self.link_name = name
         self.hosts.remember(link.address, name, self.profile.id)
@@ -375,6 +378,7 @@ class Daemon:
             link.run()
         finally:
             deck.release()
+            self.awake.release()
             GLib.idle_add(self.adapter.set_connected, False)
             self.screen_off = False
             with self.link_lock:
