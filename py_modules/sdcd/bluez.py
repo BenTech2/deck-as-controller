@@ -71,7 +71,11 @@ def enter_gamepad_mode(profile: Profile, extra_conf: str = ""):
         conf = f.read()
     identity = (f"[General]\nClass = {GAMEPAD_CLASS}\n"
                 f"DeviceID = usb:{profile.vendor_id:04X}:{profile.product_id:04X}:{profile.version:04X}\n"
-                f"Name = {profile.bt_name}\n")
+                f"Name = {profile.bt_name}\n"
+                # A host that forgot the Deck pairs again with Just Works; bluetoothd's default
+                # ("never") refuses that while we still hold the old bond. "confirm" asks our
+                # agent instead, which allows it inside the pairing window like a new host.
+                "JustWorksRepairing = confirm\n")
     conf = conf.replace("[General]\n", identity, 1) if "[General]\n" in conf else identity + conf
     conf += "\n" + extra_conf
     with open(f"{RUN_DIR}/main.conf", "w") as f:
